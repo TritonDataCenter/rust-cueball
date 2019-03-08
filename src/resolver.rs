@@ -4,10 +4,22 @@
 
 use std::sync::mpsc::Sender;
 
-pub trait Resolver: Send + Sync
-{
-    fn new (&self, s: Sender<String>) -> Self;
-    fn start(&self) -> ();
-    fn stop(&self) -> ();
+use crate::backend;
+
+pub trait Resolver: Send + 'static {
+    fn start (&mut self, s: Sender<BackendMsg>);
+    fn stop(&mut self);
     fn get_last_error(&self) -> Option<String>;
+}
+
+pub struct BackendAddedMsg {
+    pub key: backend::BackendKey,
+    pub backend: backend::Backend
+}
+
+pub struct BackendRemovedMsg(pub backend::BackendKey);
+
+pub enum BackendMsg {
+    AddedMsg(BackendAddedMsg),
+    RemovedMsg(BackendRemovedMsg)
 }

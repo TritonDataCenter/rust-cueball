@@ -1,10 +1,13 @@
 [package]
-name = "rust-cueball"
+name = "cueball"
 version = "0.1.0"
 authors = ["Kelly McLaughlin <kelly.mclaughlin@joyent.com>"]
 edition = "2018"
 
 [dependencies]
-
-scheduled-thread-pool = "0.2.0"
+base64 = "0.10.1"
+sha1 = "0.6.0"
 slog = "2.4.1"
+
+[dev-dependencies]
+slog-term = "2.4.0"

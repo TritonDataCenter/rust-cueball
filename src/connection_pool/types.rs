@@ -3,29 +3,30 @@
  */
 
 use std::cmp::Ordering;
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::time::Duration;
 
+use derive_more::{Add, AddAssign, Display, From, Into, Sub, SubAssign};
 use slog::Logger;
 
-use crate::backend::BackendKey;
+use crate::backend::{Backend, BackendKey};
 use crate::connection::Connection;
 
 
 #[derive(Copy, Clone, Debug)]
 pub struct ConnectionPoolStats {
-    pub total_connections: u32,
-    pub idle_connections: u32,
-    pub pending_connections: u32
+    pub total_connections: ConnectionCount,
+    pub idle_connections: ConnectionCount,
+    pub pending_connections: ConnectionCount
 }
 
 impl ConnectionPoolStats {
     pub fn new() -> Self {
         ConnectionPoolStats {
-            total_connections: 0,
-            idle_connections: 0,
-            pending_connections: 0
+            total_connections: ConnectionCount::from(0),
+            idle_connections: ConnectionCount::from(0),
+            pending_connections: ConnectionCount::from(0)
         }
     }
 }
@@ -103,12 +104,17 @@ where
     }
 }
 
+#[derive(Add, AddAssign, Clone, Copy, Debug, Display, Eq, From, Into, Ord,
+         PartialOrd, PartialEq, Sub, SubAssign)]
+pub struct ConnectionCount(u32);
 
 #[derive(Clone, Debug)]
 pub struct ConnectionData<C> {
+    pub backends: HashMap<BackendKey, Backend>,
     pub connections: VecDeque<ConnectionKeyPair<C>>,
-    pub stats: ConnectionPoolStats,
-    pub dead_connection_keys: HashSet<BackendKey>
+    pub connection_distribution: HashMap<BackendKey, ConnectionCount>,
+    pub unwanted_connection_counts: HashMap<BackendKey, ConnectionCount>,
+    pub stats: ConnectionPoolStats
 }
 
 impl<C> ConnectionData<C>
@@ -117,9 +123,11 @@ where
 {
     pub fn new(max_size: usize) -> Self {
         ConnectionData {
+            backends: HashMap::with_capacity(max_size),
             connections: VecDeque::with_capacity(max_size),
-            stats: ConnectionPoolStats::new(),
-            dead_connection_keys: HashSet::with_capacity(max_size)
+            connection_distribution: HashMap::with_capacity(max_size),
+            unwanted_connection_counts: HashMap::with_capacity(max_size),
+            stats: ConnectionPoolStats::new()
         }
     }
 }
@@ -171,6 +179,46 @@ where
     C: Connection
 {
     fn into(self) -> Arc<(Mutex<ConnectionData<C>>, Condvar)> {
+        self.0
+    }
+}
+
+
+#[derive(Debug)]
+pub struct RebalanceCheck(Arc<(Mutex<bool>, Condvar)>);
+
+
+impl RebalanceCheck
+{
+    pub fn new() -> Self {
+        RebalanceCheck(Arc::new((Mutex::new(false), Condvar::new())))
+    }
+
+    pub fn get_lock(&self) -> MutexGuard<bool> {
+        (self.0).0.lock().unwrap()
+    }
+
+    pub fn condvar_wait<'a>(&self, g: MutexGuard<'a, bool>)
+                        -> MutexGuard<'a, bool>
+    {
+        (self.0).1.wait(g).unwrap()
+    }
+
+    pub fn condvar_notify(&self) {
+        (self.0).1.notify_one()
+    }
+}
+
+impl Clone for RebalanceCheck
+{
+    fn clone(&self) -> RebalanceCheck {
+        RebalanceCheck(Arc::clone(&self.0))
+    }
+}
+
+impl Into<Arc<(Mutex<bool>, Condvar)>> for RebalanceCheck
+{
+    fn into(self) -> Arc<(Mutex<bool>, Condvar)> {
         self.0
     }
 }

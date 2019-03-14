@@ -97,7 +97,8 @@ impl Resolver for FakeResolver {
     }
 }
 
-fn main() {
+#[test]
+fn connection_pool_claim() {
     let plain = slog_term::PlainSyncDecorator::new(std::io::stdout());
     let log = Logger::root(
         Mutex::new(
@@ -108,12 +109,13 @@ fn main() {
 
     info!(log, "running basic cueball example");
 
-    // Start a pool and start some threads to use connections
+    // Only use one backend to keep the test deterministic. Cueball allows for
+    // some slop in the maximum number of pool connections as new backends come
+    // online and connections are reblanced and having multiple backends that
+    // start asynchronously would make it difficult for the test to be reliable.
     let be1 = (IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 55555);
-    let be2 = (IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 55556);
-    let be3 = (IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 55557);
 
-    let resolver = FakeResolver::new(vec![be1, be2, be3]);
+    let resolver = FakeResolver::new(vec![be1]);
 
     let pool_opts = ConnectionPoolOptions::<FakeResolver> {
         domain: String::from("abc.com"),
@@ -177,9 +179,9 @@ fn main() {
 
     barrier2.wait();
 
-    let _  = thread1.join();
-    let _  = thread2.join();
-    let _  = thread3.join();
+    let _ = thread1.join();
+    let _ = thread2.join();
+    let _ = thread3.join();
 
     let m_claim3 = pool.try_claim();
     assert!(m_claim3.is_some());

@@ -13,6 +13,7 @@ pub type BackendPort = u16;
 pub type BackendName = String;
 pub type BackendAddress = IpAddr;
 
+#[derive(Clone, Debug)]
 pub struct Backend {
     pub name: BackendName,
     pub address: BackendAddress,

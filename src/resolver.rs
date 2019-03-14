@@ -23,3 +23,8 @@ pub enum BackendMsg {
     AddedMsg(BackendAddedMsg),
     RemovedMsg(BackendRemovedMsg)
 }
+
+pub enum BackendAction {
+    BackendAdded,
+    BackendRemoved
+}

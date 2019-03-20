@@ -118,7 +118,7 @@ where
             thread::spawn(move || rebalancer_loop(max_connections, protected_data_clone2, rebalancer_clone2, rebalancer_log_clone));
 
         let pool = ConnectionPool {
-            protected_data: protected_data,
+            protected_data,
             last_error: None,
             resolver_thread: Some(resolver_thread),
             resolver_rx_thread: Some(resolver_rx_thread),
@@ -135,7 +135,7 @@ where
         pool
     }
 
-    pub fn stop(&self) -> () {
+    pub fn stop(&self) {
         std::unimplemented!()
     }
 
@@ -176,7 +176,6 @@ where
                                     unwanted_connection_counts.remove(&key);
                                 }
                             }
-                            ()
                         } else {
                             info!(self.log, "Found idle connection for backend {}", &key);
                             connection_data.stats.idle_connections =
@@ -219,7 +218,7 @@ where
 
         connection_data.unwanted_connection_counts = unwanted_connection_counts;
 
-        return result;
+        result
     }
 
     pub fn try_claim(&self) -> Option<PoolConnection<C, R>> {
@@ -260,7 +259,6 @@ where
                                     unwanted_connection_counts.remove(&key);
                                 }
                             }
-                            ()
                         } else {
                             info!(self.log, "Found idle connection for backend {}", &key);
 
@@ -293,7 +291,7 @@ where
 
         connection_data.unwanted_connection_counts = unwanted_connection_counts;
 
-        return result;
+        result
     }
 
     pub fn get_last_error(&self) -> Option<String> {
@@ -369,7 +367,6 @@ fn log_error(log: &Logger, result: Result<(), Error>) {
     if let Err(err) = result {
         let err_str = format!("{}", err);
         error!(log, "{}", err_str);
-        ()
     }
 }
 
@@ -534,14 +531,14 @@ where
             // unwanted_connections < max_connections
             let mut unwanted_connections_total = ConnectionCount::from(0);
             connection_data.unwanted_connection_counts.values().for_each(|ucc| {
-                unwanted_connections_total += (*ucc).into();
+                unwanted_connections_total += *ucc;
             });
 
             debug!(log, "Unwanted connection count: {}", unwanted_connections_total);
 
             let net_total_connections =
                 connection_data.stats.total_connections -
-                unwanted_connections_total.into();
+                unwanted_connections_total;
 
             debug!(log, "Net total connections: {}", net_total_connections);
 
@@ -601,7 +598,7 @@ where
                     None
                 }
             };
-        if let Some(_) = result {
+        if result.is_some() {
             // Spawn a new thread so as not to block the resolver thread waiting
             // for a lock the rebalancer thread might hold
             let rebalance_clone = rebalance_check.clone();
@@ -642,15 +639,12 @@ where
 
         info!(log, "Connection rebalance completed");
 
-        match rebalance_result {
-            Ok(Some(added_connection_count)) => {
+        if let Ok(Some(added_connection_count)) = rebalance_result {
                 info!(log, "Adding new connections");
                 add_connections(added_connection_count,
                                 &max_connections,
                                 &log,
                                 protected_data.clone())
-            },
-            _ => ()
         }
         *rebalance = false;
     }

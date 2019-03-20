@@ -151,20 +151,22 @@ where
         while waiting_for_connection {
             if connection_data.stats.idle_connections > 0.into() {
                 match connection_data.connections.pop_front() {
-                    Some(ConnectionKeyPair((key, Some(mut conn)))) => {
+                    Some(ConnectionKeyPair((key, Some(conn)))) => {
                         if unwanted_connection_counts.contains_key(&key) {
-                            // This connection is unwanted so close it and try to
-                            // claim the next one in the queue.
-                            connection_data.stats.idle_connections =
-                                connection_data.stats.idle_connections - 1.into();
-                            let log_clone = self.log.clone();
-                            let log_msg = format!("Closing unwanted connection \
-                                                   for backend {}", &key);
-                            thread::spawn(move || {
-                                info!(log_clone, "{}", log_msg);
-                                let _conn_close_result = conn.close();
+                            // This connection is unwanted so close it and try
+                            // to claim the next one in the queue. Spawn a
+                            // separate thread to close this connection. The
+                            // implementation of this function is outside the
+                            // control of the pool so isolate the execution in
+                            // its own thread to be safe.
+                            let close_log = self.log.clone();
+                            let close_key = key.clone();
+                            let _close_thread = thread::spawn(|| {
+                                close_connection(close_log, close_key, conn)
                             });
 
+                            connection_data.stats.idle_connections =
+                                connection_data.stats.idle_connections - 1.into();
                             unwanted_connection_counts
                                 .entry(key.clone())
                                 .and_modify(|e| { *e -= 1u32.into()});
@@ -232,13 +234,20 @@ where
         while waiting_for_connection {
             if connection_data.stats.idle_connections > 0.into() {
                 match connection_data.connections.pop_front() {
-                    Some(ConnectionKeyPair((key, Some(mut conn)))) => {
+                    Some(ConnectionKeyPair((key, Some(conn)))) => {
                         if unwanted_connection_counts.contains_key(&key) {
-                            // This connection is unwanted so close it and try to
-                            // claim the next one in the queue.
-                            // TODO: Spawn a separate thread to close this connection
-                            info!(self.log, "Closing unwanted connection for backend {}", &key);
-                            let _conn_close_result = conn.close();
+                            // This connection is unwanted so close it and try
+                            // to claim the next one in the queue. Spawn a
+                            // separate thread to close this connection. The
+                            // implementation of this function is outside the
+                            // control of the pool so isolate the execution in
+                            // its own thread to be safe.
+                            let close_log = self.log.clone();
+                            let close_key = key.clone();
+                            let _close_thread = thread::spawn(|| {
+                                close_connection(close_log, close_key, conn)
+                            });
+
                             connection_data.stats.idle_connections =
                                 connection_data.stats.idle_connections - 1.into();
 
@@ -342,6 +351,19 @@ where
     }
 }
 
+
+fn close_connection<C>(log: Logger, key: BackendKey, mut conn: C)
+where
+    C: Connection
+{
+    info!(log, "Closing unwanted connection for backend {}", &key);
+    if let Err(err) = conn.close() {
+        warn!(log, "Failed to properly close \
+                    unwanted connection for \
+                    backend {}. Reason: {}"
+              , &key, err);
+    }
+}
 
 fn log_error(log: &Logger, result: Result<(), Error>) {
     if let Err(err) = result {

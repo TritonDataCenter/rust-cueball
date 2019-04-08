@@ -39,10 +39,6 @@ impl Connection for DummyConnection {
         self.connected = false;
         Ok(())
     }
-
-    fn set_unwanted(&self) {
-        ()
-    }
 }
 
 pub struct FakeResolver {
@@ -67,7 +63,7 @@ impl Resolver for FakeResolver {
     fn start(&mut self, s: Sender<BackendMsg>) {
         if !self.started {
             self.backends.iter().for_each(|b| {
-                let backend = Backend::new(&b.0, &b.1);
+                let backend = Backend::new(&b.0, b.1);
                 let backend_key = backend::srv_key(&backend);
                 let backend_msg =
                     BackendMsg::AddedMsg(
@@ -116,10 +112,7 @@ fn main() {
     let resolver = FakeResolver::new(vec![be1, be2, be3]);
 
     let pool_opts = ConnectionPoolOptions::<FakeResolver> {
-        domain: String::from("abc.com"),
-        spares: 3,
         maximum: 3,
-        service: None,
         claim_timeout: Some(1000),
         resolver: resolver,
         log: log.clone()

@@ -1,15 +1,15 @@
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::{Arc, Barrier, Mutex};
 use std::sync::mpsc::Sender;
-use std::{thread, time};
+use std::thread;
 
-use slog::{Drain, Logger, info, o};
+use slog::{Drain, Logger, o};
 
 use cueball::backend;
 use cueball::backend::{Backend, BackendAddress, BackendPort};
 use cueball::connection::Connection;
 use cueball::connection_pool::ConnectionPool;
-use cueball::connection_pool::types::ConnectionPoolOptions;
+use cueball::connection_pool::types::{ConnectionCount, ConnectionPoolOptions};
 use cueball::error::Error;
 use cueball::resolver::{BackendAddedMsg, BackendMsg, Resolver};
 
@@ -39,10 +39,6 @@ impl Connection for DummyConnection {
         self.connected = false;
         Ok(())
     }
-
-    fn set_unwanted(&self) {
-        ()
-    }
 }
 
 pub struct FakeResolver {
@@ -67,7 +63,7 @@ impl Resolver for FakeResolver {
     fn start(&mut self, s: Sender<BackendMsg>) {
         if !self.started {
             self.backends.iter().for_each(|b| {
-                let backend = Backend::new(&b.0, &b.1);
+                let backend = Backend::new(&b.0, b.1);
                 let backend_key = backend::srv_key(&backend);
                 let backend_msg =
                     BackendMsg::AddedMsg(
@@ -107,8 +103,6 @@ fn connection_pool_claim() {
         o!("build-id" => "0.1.0")
     );
 
-    info!(log, "running basic cueball example");
-
     // Only use one backend to keep the test deterministic. Cueball allows for
     // some slop in the maximum number of pool connections as new backends come
     // online and connections are reblanced and having multiple backends that
@@ -118,21 +112,25 @@ fn connection_pool_claim() {
     let resolver = FakeResolver::new(vec![be1]);
 
     let pool_opts = ConnectionPoolOptions::<FakeResolver> {
-        domain: String::from("abc.com"),
-        spares: 3,
         maximum: 3,
-        service: None,
         claim_timeout: Some(1000),
         resolver: resolver,
         log: log.clone()
     };
 
+    let max_connections = pool_opts.maximum.clone();
+
     let pool = ConnectionPool::<DummyConnection, FakeResolver>::new(pool_opts);
 
-    // Backend initialization happens asynchronously so give the backends some
-    // time to get started
-    let sleep_time = time::Duration::from_millis(1000);
-    thread::sleep(sleep_time);
+    // Wait for total_connections to reach the maximum
+    let mut all_conns_established = false;
+    while !all_conns_established {
+        if let Some(stats) = pool.get_stats() {
+            if stats.total_connections == max_connections.into() {
+                all_conns_established = true;
+            }
+        }
+    }
 
     let barrier1 = Arc::new(Barrier::new(4));
     let barrier2 = Arc::new(Barrier::new(4));
@@ -185,4 +183,162 @@ fn connection_pool_claim() {
 
     let m_claim3 = pool.try_claim();
     assert!(m_claim3.is_some());
+}
+
+#[test]
+fn connection_pool_stop() {
+    let plain = slog_term::PlainSyncDecorator::new(std::io::stdout());
+    let log = Logger::root(
+        Mutex::new(
+            slog_term::FullFormat::new(plain).build()
+        ).fuse(),
+        o!("build-id" => "0.1.0")
+    );
+
+    // Only use one backend to keep the test deterministic. Cueball allows for
+    // some slop in the maximum number of pool connections as new backends come
+    // online and connections are reblanced and having multiple backends that
+    // start asynchronously would make it difficult for the test to be reliable.
+    let be1 = (IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 55555);
+
+    let resolver = FakeResolver::new(vec![be1]);
+
+    let pool_opts = ConnectionPoolOptions::<FakeResolver> {
+        maximum: 3,
+        claim_timeout: Some(1000),
+        resolver: resolver,
+        log: log.clone()
+    };
+
+    let max_connections = pool_opts.maximum.clone();
+
+    let mut pool = ConnectionPool::<DummyConnection, FakeResolver>::new(pool_opts);
+
+    // Wait for total_connections to reach the maximum
+    let mut all_conns_established = false;
+    while !all_conns_established {
+        if let Some(stats) = pool.get_stats() {
+            if stats.total_connections == max_connections.into() {
+                all_conns_established = true;
+            }
+        }
+    }
+
+    let stop_result = pool.stop();
+    assert!(stop_result.is_ok());
+}
+
+
+// TODO: Use quickcheck for this test. At very least the max_connections count
+// could be easily generated.
+#[test]
+fn connection_pool_accounting() {
+    let plain = slog_term::PlainSyncDecorator::new(std::io::stdout());
+    let log = Logger::root(
+        Mutex::new(
+            slog_term::FullFormat::new(plain).build()
+        ).fuse(),
+        o!("build-id" => "0.1.0")
+    );
+
+    // Only use one backend to keep the test deterministic. Cueball allows for
+    // some slop in the maximum number of pool connections as new backends come
+    // online and connections are reblanced and having multiple backends that
+    // start asynchronously would make it difficult for the test to be reliable.
+    let be1 = (IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 55555);
+
+    let resolver = FakeResolver::new(vec![be1]);
+
+    let pool_opts = ConnectionPoolOptions::<FakeResolver> {
+        maximum: 3,
+        claim_timeout: Some(1000),
+        resolver: resolver,
+        log: log.clone()
+    };
+
+    let max_connections: ConnectionCount = pool_opts.maximum.clone().into();
+
+    let mut pool = ConnectionPool::<DummyConnection, FakeResolver>::new(pool_opts);
+
+    // Wait for total_connections to reach the maximum
+    let mut all_conns_established = false;
+    while !all_conns_established {
+        if let Some(stats) = pool.get_stats() {
+            if stats.total_connections == max_connections {
+                all_conns_established = true;
+            }
+        }
+    }
+
+    // Sanity check our starting stats
+    let m_starting_stats = pool.get_stats();
+    assert!(m_starting_stats.is_some());
+    let starting_stats = m_starting_stats.unwrap();
+    assert_eq!(starting_stats.total_connections, max_connections);
+    assert_eq!(starting_stats.idle_connections, max_connections);
+    assert_eq!(starting_stats.pending_connections, 0.into());
+
+    let conn_result1 = pool.claim();
+    assert!(conn_result1.is_ok());
+
+    let m_stats_check1 = pool.get_stats();
+    assert!(m_stats_check1.is_some());
+    let stats_check1 = m_stats_check1.unwrap();
+    assert_eq!(stats_check1.total_connections, max_connections);
+    assert_eq!(stats_check1.idle_connections, max_connections-1.into());
+    assert_eq!(stats_check1.pending_connections, 0.into());
+
+    let conn_result2 = pool.claim();
+    assert!(conn_result2.is_ok());
+
+    let m_stats_check2 = pool.get_stats();
+    assert!(m_stats_check2.is_some());
+    let stats_check2 = m_stats_check2.unwrap();
+    assert_eq!(stats_check2.total_connections, max_connections);
+    assert_eq!(stats_check2.idle_connections, max_connections-2.into());
+    assert_eq!(stats_check2.pending_connections, 0.into());
+
+    let conn_result3 = pool.claim();
+    assert!(conn_result3.is_ok());
+
+    let m_stats_check3 = pool.get_stats();
+    assert!(m_stats_check3.is_some());
+    let stats_check3 = m_stats_check3.unwrap();
+    assert_eq!(stats_check3.total_connections, max_connections);
+    assert_eq!(stats_check3.idle_connections, max_connections-3.into());
+    assert_eq!(stats_check3.pending_connections, 0.into());
+
+    drop(conn_result3);
+
+    let m_stats_check4 = pool.get_stats();
+    assert!(m_stats_check4.is_some());
+    let stats_check4 = m_stats_check4.unwrap();
+    assert_eq!(stats_check4.total_connections, max_connections);
+    assert_eq!(stats_check4.idle_connections, max_connections-2.into());
+    assert_eq!(stats_check4.pending_connections, 0.into());
+
+    drop(conn_result2);
+
+    let m_stats_check5 = pool.get_stats();
+    assert!(m_stats_check5.is_some());
+    let stats_check5 = m_stats_check5.unwrap();
+    assert_eq!(stats_check5.total_connections, max_connections);
+    assert_eq!(stats_check5.idle_connections, max_connections-1.into());
+    assert_eq!(stats_check5.pending_connections, 0.into());
+
+    drop(conn_result1);
+
+    let m_stats_check6 = pool.get_stats();
+    assert!(m_stats_check6.is_some());
+    let stats_check6 = m_stats_check6.unwrap();
+    assert_eq!(stats_check6.total_connections, max_connections);
+    assert_eq!(stats_check6.idle_connections, max_connections);
+    assert_eq!(stats_check6.pending_connections, 0.into());
+
+    let stop_result = pool.stop();
+    assert!(stop_result.is_ok());
+
+    let m_stats_check7 = pool.get_stats();
+    assert!(m_stats_check7.is_none());
+    assert_eq!(pool.get_state(), String::from("stopped"));
 }

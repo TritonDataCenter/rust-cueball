@@ -4,6 +4,7 @@
 
 use std::cmp::Ordering;
 use std::collections::{HashMap, VecDeque};
+use std::fmt;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::time::Duration;
 
@@ -14,14 +15,19 @@ use crate::backend::{Backend, BackendKey};
 use crate::connection::Connection;
 
 
+/// The connection counts for the connection pool
 #[derive(Copy, Clone, Debug)]
 pub struct ConnectionPoolStats {
+    /// The total number of connections
     pub total_connections: ConnectionCount,
+    /// The count of idle connections in the pool
     pub idle_connections: ConnectionCount,
+    /// The number of created, but not yet connected connections
     pub pending_connections: ConnectionCount
 }
 
 impl ConnectionPoolStats {
+    /// Create a new instance of `ConnectionPooStats`
     pub fn new() -> Self {
         ConnectionPoolStats {
             total_connections: ConnectionCount::from(0),
@@ -31,17 +37,35 @@ impl ConnectionPoolStats {
     }
 }
 
+impl Default for ConnectionPoolStats {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+
+/// The configuration options for a Cueball connection pool. This is required to
+/// instantiate a new connection pool.
 #[derive(Debug)]
 pub struct ConnectionPoolOptions<R> {
-    pub domain: String,
-    pub spares: u32,
+    /// The maximum number of connections to maintain in the connection pool.
     pub maximum: u32,
-    pub service: Option<String>,
+    /// An optional timeout for blocking calls to request a connection from the
+    /// pool.
     pub claim_timeout: Option<u64>,
+    /// The implementation of [`Resolver`]: ../trait.Resolver.html that the
+    /// connection pool should use.
     pub resolver: R,
+    /// A `slog` logger instance.
     pub log: Logger
 }
 
+
+// This type wraps a pair that associates a `BackendKey` with a connection of
+// type `C`. The second member of the pair is an Option type to facilitate
+// ownership issues when the connection needs to be closed by the connection
+// pool.
+#[doc(hidden)]
 #[derive(Clone, Debug)]
 pub struct ConnectionKeyPair<C>(pub (BackendKey, Option<C>));
 
@@ -104,10 +128,14 @@ where
     }
 }
 
+/// A newtype wrapper around u32 used for counts of connections mainatained by the connection pool.
 #[derive(Add, AddAssign, Clone, Copy, Debug, Display, Eq, From, Into, Ord,
          PartialOrd, PartialEq, Sub, SubAssign)]
 pub struct ConnectionCount(u32);
 
+
+// The internal data structures used to manage the connection pool.
+#[doc(hidden)]
 #[derive(Clone, Debug)]
 pub struct ConnectionData<C> {
     pub backends: HashMap<BackendKey, Backend>,
@@ -121,6 +149,7 @@ impl<C> ConnectionData<C>
 where
     C: Connection
 {
+    #[doc(hidden)]
     pub fn new(max_size: usize) -> Self {
         ConnectionData {
             backends: HashMap::with_capacity(max_size),
@@ -132,6 +161,8 @@ where
     }
 }
 
+// Protected access to the internal connection pool data structures
+#[doc(hidden)]
 #[derive(Debug)]
 pub struct ProtectedData<C>(Arc<(Mutex<ConnectionData<C>>, Condvar)>);
 
@@ -184,12 +215,16 @@ where
 }
 
 
-#[derive(Debug)]
+// Internal data type used for inter-thread communications regarding connection
+// pool rebalancing.
+#[doc(hidden)]
+#[derive(Debug, Default)]
 pub struct RebalanceCheck(Arc<(Mutex<bool>, Condvar)>);
-
 
 impl RebalanceCheck
 {
+
+    #![allow(clippy::mutex_atomic)]
     pub fn new() -> Self {
         RebalanceCheck(Arc::new((Mutex::new(false), Condvar::new())))
     }
@@ -201,7 +236,9 @@ impl RebalanceCheck
     pub fn condvar_wait<'a>(&self, g: MutexGuard<'a, bool>)
                         -> MutexGuard<'a, bool>
     {
-        (self.0).1.wait(g).unwrap()
+        let timeout = Duration::from_millis(500);
+        let wait_result = (self.0).1.wait_timeout(g, timeout).unwrap();
+        wait_result.0
     }
 
     pub fn condvar_notify(&self) {
@@ -220,5 +257,30 @@ impl Into<Arc<(Mutex<bool>, Condvar)>> for RebalanceCheck
 {
     fn into(self) -> Arc<(Mutex<bool>, Condvar)> {
         self.0
+    }
+}
+
+
+/// Sum type representing the current state of the connection pool. Possible
+/// states are running, stopping, or stopped.
+#[derive(Copy, Clone, Debug)]
+pub enum ConnectionPoolState {
+    /// The pool is running and able to service connection claim requests.
+    Running,
+    /// The connection pool is performing cleanup and is no longer accepting
+    /// connection claim requests.
+    Stopping,
+    /// The connection pool is stopped and is no longer accepting connection
+    /// claim requests.
+    Stopped
+}
+
+impl fmt::Display for ConnectionPoolState {
+    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            ConnectionPoolState::Running => String::from("running").fmt(fmt),
+            ConnectionPoolState::Stopping => String::from("stopping").fmt(fmt),
+            ConnectionPoolState::Stopped => String::from("stopped").fmt(fmt)
+        }
     }
 }

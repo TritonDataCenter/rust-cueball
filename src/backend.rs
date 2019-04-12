@@ -9,10 +9,8 @@ use sha1::Sha1;
 
 use derive_more::{Display, From, Into};
 
-
 /// A base64 encoded identifier based on the backend name, address, and port.
-#[derive(Clone, Debug, Display, Eq, From, Hash, Into, Ord,
-         PartialOrd, PartialEq)]
+#[derive(Clone, Debug, Display, Eq, From, Hash, Into, Ord, PartialOrd, PartialEq)]
 pub struct BackendKey(String);
 /// The port number for a backend. This is a type alias for u16.
 pub type BackendPort = u16;

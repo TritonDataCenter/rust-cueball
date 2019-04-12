@@ -1,18 +1,17 @@
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-use std::sync::{Arc, Barrier, Mutex};
 use std::sync::mpsc::Sender;
+use std::sync::{Arc, Barrier, Mutex};
 use std::{thread, time};
 
-use slog::{Drain, Logger, info, o};
+use slog::{info, o, Drain, Logger};
 
 use cueball::backend;
 use cueball::backend::{Backend, BackendAddress, BackendPort};
 use cueball::connection::Connection;
-use cueball::connection_pool::ConnectionPool;
 use cueball::connection_pool::types::ConnectionPoolOptions;
+use cueball::connection_pool::ConnectionPool;
 use cueball::error::Error;
 use cueball::resolver::{BackendAddedMsg, BackendMsg, Resolver};
-
 
 #[derive(Debug)]
 pub struct DummyConnection {
@@ -26,7 +25,7 @@ impl Connection for DummyConnection {
 
         DummyConnection {
             addr: addr,
-            connected: false
+            connected: false,
         }
     }
 
@@ -65,12 +64,10 @@ impl Resolver for FakeResolver {
             self.backends.iter().for_each(|b| {
                 let backend = Backend::new(&b.0, b.1);
                 let backend_key = backend::srv_key(&backend);
-                let backend_msg =
-                    BackendMsg::AddedMsg(
-                        BackendAddedMsg {
-                            key: backend_key,
-                            backend: backend
-                        });
+                let backend_msg = BackendMsg::AddedMsg(BackendAddedMsg {
+                    key: backend_key,
+                    backend: backend
+                });
                 s.send(backend_msg).unwrap();
             });
             self.pool_tx = Some(s);
@@ -85,8 +82,8 @@ impl Resolver for FakeResolver {
 
     fn get_last_error(&self) -> Option<String> {
         if let Some(err) = &self.error {
-                let err_str = format!("{}", err);
-                Some(err_str)
+            let err_str = format!("{}", err);
+            Some(err_str)
         } else {
             None
         }
@@ -96,9 +93,7 @@ impl Resolver for FakeResolver {
 fn main() {
     let plain = slog_term::PlainSyncDecorator::new(std::io::stdout());
     let log = Logger::root(
-        Mutex::new(
-            slog_term::FullFormat::new(plain).build()
-        ).fuse(),
+        Mutex::new(slog_term::FullFormat::new(plain).build()).fuse(),
         o!("build-id" => "0.1.0")
     );
 
@@ -115,7 +110,8 @@ fn main() {
         maximum: 3,
         claim_timeout: Some(1000),
         resolver: resolver,
-        log: log.clone()
+        log: log.clone(),
+        rebalancer_action_delay: None
     };
 
     let pool = ConnectionPool::<DummyConnection, FakeResolver>::new(pool_opts);
@@ -170,9 +166,9 @@ fn main() {
 
     barrier2.wait();
 
-    let _  = thread1.join();
-    let _  = thread2.join();
-    let _  = thread3.join();
+    let _ = thread1.join();
+    let _ = thread2.join();
+    let _ = thread3.join();
 
     let m_claim3 = pool.try_claim();
     assert!(m_claim3.is_some());

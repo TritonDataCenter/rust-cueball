@@ -14,7 +14,6 @@ use slog::Logger;
 use crate::backend::{Backend, BackendKey};
 use crate::connection::Connection;
 
-
 /// The connection counts for the connection pool
 #[derive(Copy, Clone, Debug)]
 pub struct ConnectionPoolStats {
@@ -43,7 +42,6 @@ impl Default for ConnectionPoolStats {
     }
 }
 
-
 /// The configuration options for a Cueball connection pool. This is required to
 /// instantiate a new connection pool.
 #[derive(Debug)]
@@ -57,9 +55,12 @@ pub struct ConnectionPoolOptions<R> {
     /// connection pool should use.
     pub resolver: R,
     /// A `slog` logger instance.
-    pub log: Logger
+    pub log: Logger,
+    /// An optional delay time to avoid extra rebalancing work in case the
+    /// resolver notifies the pool of multiple changes within a short
+    /// period. The default is 100 milliseconds.
+    pub rebalancer_action_delay: Option<u64>
 }
-
 
 // This type wraps a pair that associates a `BackendKey` with a connection of
 // type `C`. The second member of the pair is an Option type to facilitate
@@ -71,21 +72,18 @@ pub struct ConnectionKeyPair<C>(pub (BackendKey, Option<C>));
 
 impl<C> PartialEq for ConnectionKeyPair<C>
 where
-    C: Connection
+    C: Connection,
 {
     fn eq(&self, other: &ConnectionKeyPair<C>) -> bool {
         (self.0).0 == (other.0).0
     }
 }
 
-impl<C> Eq for ConnectionKeyPair<C>
-where
-    C: Connection
-{}
+impl<C> Eq for ConnectionKeyPair<C> where C: Connection {}
 
 impl<C> Ord for ConnectionKeyPair<C>
 where
-    C: Connection
+    C: Connection,
 {
     fn cmp(&self, other: &ConnectionKeyPair<C>) -> Ordering {
         (self.0).0.cmp(&(other.0).0)
@@ -94,7 +92,7 @@ where
 
 impl<C> PartialOrd for ConnectionKeyPair<C>
 where
-    C: Connection
+    C: Connection,
 {
     fn partial_cmp(&self, other: &ConnectionKeyPair<C>) -> Option<Ordering> {
         (self.0).0.partial_cmp(&(other.0).0)
@@ -103,7 +101,7 @@ where
 
 impl<C> From<(BackendKey, C)> for ConnectionKeyPair<C>
 where
-    C: Connection
+    C: Connection,
 {
     fn from(pair: (BackendKey, C)) -> Self {
         ConnectionKeyPair((pair.0, Some(pair.1)))
@@ -112,7 +110,7 @@ where
 
 impl<C> From<(BackendKey, Option<C>)> for ConnectionKeyPair<C>
 where
-    C: Connection
+    C: Connection,
 {
     fn from(pair: (BackendKey, Option<C>)) -> Self {
         ConnectionKeyPair((pair.0, pair.1))
@@ -121,7 +119,7 @@ where
 
 impl<C> Into<(BackendKey, Option<C>)> for ConnectionKeyPair<C>
 where
-    C: Connection
+    C: Connection,
 {
     fn into(self) -> (BackendKey, Option<C>) {
         ((self.0).0, (self.0).1)
@@ -129,10 +127,9 @@ where
 }
 
 /// A newtype wrapper around u32 used for counts of connections mainatained by the connection pool.
-#[derive(Add, AddAssign, Clone, Copy, Debug, Display, Eq, From, Into, Ord,
-         PartialOrd, PartialEq, Sub, SubAssign)]
+#[derive( Add, AddAssign, Clone, Copy, Debug, Display, Eq, From, Into, Ord,
+    PartialOrd, PartialEq, Sub, SubAssign )]
 pub struct ConnectionCount(u32);
-
 
 // The internal data structures used to manage the connection pool.
 #[doc(hidden)]
@@ -147,7 +144,7 @@ pub struct ConnectionData<C> {
 
 impl<C> ConnectionData<C>
 where
-    C: Connection
+    C: Connection,
 {
     #[doc(hidden)]
     pub fn new(max_size: usize) -> Self {
@@ -168,7 +165,7 @@ pub struct ProtectedData<C>(Arc<(Mutex<ConnectionData<C>>, Condvar)>);
 
 impl<C> ProtectedData<C>
 where
-    C: Connection
+    C: Connection,
 {
     pub fn new(connection_data: ConnectionData<C>) -> Self {
         ProtectedData(Arc::new((Mutex::new(connection_data), Condvar::new())))
@@ -178,15 +175,17 @@ where
         (self.0).0.lock().unwrap()
     }
 
-    pub fn condvar_wait<'a>(&self, g: MutexGuard<'a, ConnectionData<C>>, m_timeout_ms: Option<u64>)
-                        -> (MutexGuard<'a, ConnectionData<C>>, bool)
-    {
+    pub fn condvar_wait<'a>(
+        &self,
+        g: MutexGuard<'a, ConnectionData<C>>,
+        m_timeout_ms: Option<u64>,
+    ) -> (MutexGuard<'a, ConnectionData<C>>, bool) {
         match m_timeout_ms {
             Some(timeout_ms) => {
                 let timeout = Duration::from_millis(timeout_ms);
                 let wait_result = (self.0).1.wait_timeout(g, timeout).unwrap();
                 (wait_result.0, wait_result.1.timed_out())
-            },
+            }
             None => ((self.0).1.wait(g).unwrap(), false)
         }
     }
@@ -198,7 +197,7 @@ where
 
 impl<C> Clone for ProtectedData<C>
 where
-    C: Connection
+    C: Connection,
 {
     fn clone(&self) -> ProtectedData<C> {
         ProtectedData(Arc::clone(&self.0))
@@ -207,13 +206,12 @@ where
 
 impl<C> Into<Arc<(Mutex<ConnectionData<C>>, Condvar)>> for ProtectedData<C>
 where
-    C: Connection
+    C: Connection,
 {
     fn into(self) -> Arc<(Mutex<ConnectionData<C>>, Condvar)> {
         self.0
     }
 }
-
 
 // Internal data type used for inter-thread communications regarding connection
 // pool rebalancing.
@@ -221,9 +219,7 @@ where
 #[derive(Debug, Default)]
 pub struct RebalanceCheck(Arc<(Mutex<bool>, Condvar)>);
 
-impl RebalanceCheck
-{
-
+impl RebalanceCheck {
     #![allow(clippy::mutex_atomic)]
     pub fn new() -> Self {
         RebalanceCheck(Arc::new((Mutex::new(false), Condvar::new())))
@@ -233,9 +229,7 @@ impl RebalanceCheck
         (self.0).0.lock().unwrap()
     }
 
-    pub fn condvar_wait<'a>(&self, g: MutexGuard<'a, bool>)
-                        -> MutexGuard<'a, bool>
-    {
+    pub fn condvar_wait<'a>(&self, g: MutexGuard<'a, bool>) -> MutexGuard<'a, bool> {
         let timeout = Duration::from_millis(500);
         let wait_result = (self.0).1.wait_timeout(g, timeout).unwrap();
         wait_result.0
@@ -246,20 +240,17 @@ impl RebalanceCheck
     }
 }
 
-impl Clone for RebalanceCheck
-{
+impl Clone for RebalanceCheck {
     fn clone(&self) -> RebalanceCheck {
         RebalanceCheck(Arc::clone(&self.0))
     }
 }
 
-impl Into<Arc<(Mutex<bool>, Condvar)>> for RebalanceCheck
-{
+impl Into<Arc<(Mutex<bool>, Condvar)>> for RebalanceCheck {
     fn into(self) -> Arc<(Mutex<bool>, Condvar)> {
         self.0
     }
 }
-
 
 /// Sum type representing the current state of the connection pool. Possible
 /// states are running, stopping, or stopped.

@@ -16,7 +16,7 @@ use crate::backend;
 pub trait Resolver: Send + 'static {
     /// Start the operation of the resolver. Begin querying for backends and
     /// notifying the connection pool using the provided `Sender`.
-    fn start (&mut self, s: Sender<BackendMsg>);
+    fn start(&mut self, s: Sender<BackendMsg>);
     /// Shutdown the resolver. Cease querying for new backends. In the event
     /// that attempting to send a message on the `Sender` channel provided in
     /// [`start`]: #method.start fails with an error then this method should be
@@ -32,7 +32,7 @@ pub struct BackendAddedMsg {
     /// A backend key
     pub key: backend::BackendKey,
     /// A `Backend` instance
-    pub backend: backend::Backend
+    pub backend: backend::Backend,
 }
 
 /// Represents the message that should be sent to the backend when a backend is
@@ -43,7 +43,7 @@ pub struct BackendRemovedMsg(pub backend::BackendKey);
 /// only for use by the connection pool when performing cleanup prior to
 /// shutting down.
 pub enum BackendMsg {
-   /// Indicates a new backend was found by the resolver
+    /// Indicates a new backend was found by the resolver
     AddedMsg(BackendAddedMsg),
     /// Indicates a backend is no longer available to service connections
     RemovedMsg(BackendRemovedMsg),

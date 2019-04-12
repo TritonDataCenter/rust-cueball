@@ -1,18 +1,17 @@
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-use std::sync::{Arc, Barrier, Mutex};
 use std::sync::mpsc::Sender;
+use std::sync::{Arc, Barrier, Mutex};
 use std::thread;
 
-use slog::{Drain, Logger, o};
+use slog::{o, Drain, Logger};
 
 use cueball::backend;
 use cueball::backend::{Backend, BackendAddress, BackendPort};
 use cueball::connection::Connection;
-use cueball::connection_pool::ConnectionPool;
 use cueball::connection_pool::types::{ConnectionCount, ConnectionPoolOptions};
+use cueball::connection_pool::ConnectionPool;
 use cueball::error::Error;
 use cueball::resolver::{BackendAddedMsg, BackendMsg, Resolver};
-
 
 #[derive(Debug)]
 pub struct DummyConnection {
@@ -65,12 +64,10 @@ impl Resolver for FakeResolver {
             self.backends.iter().for_each(|b| {
                 let backend = Backend::new(&b.0, b.1);
                 let backend_key = backend::srv_key(&backend);
-                let backend_msg =
-                    BackendMsg::AddedMsg(
-                        BackendAddedMsg {
-                            key: backend_key,
-                            backend: backend
-                        });
+                let backend_msg = BackendMsg::AddedMsg(BackendAddedMsg {
+                    key: backend_key,
+                    backend: backend
+                });
                 s.send(backend_msg).unwrap();
             });
             self.pool_tx = Some(s);
@@ -85,8 +82,8 @@ impl Resolver for FakeResolver {
 
     fn get_last_error(&self) -> Option<String> {
         if let Some(err) = &self.error {
-                let err_str = format!("{}", err);
-                Some(err_str)
+            let err_str = format!("{}", err);
+            Some(err_str)
         } else {
             None
         }
@@ -97,9 +94,7 @@ impl Resolver for FakeResolver {
 fn connection_pool_claim() {
     let plain = slog_term::PlainSyncDecorator::new(std::io::stdout());
     let log = Logger::root(
-        Mutex::new(
-            slog_term::FullFormat::new(plain).build()
-        ).fuse(),
+        Mutex::new(slog_term::FullFormat::new(plain).build()).fuse(),
         o!("build-id" => "0.1.0")
     );
 
@@ -115,7 +110,8 @@ fn connection_pool_claim() {
         maximum: 3,
         claim_timeout: Some(1000),
         resolver: resolver,
-        log: log.clone()
+        log: log.clone(),
+        rebalancer_action_delay: None
     };
 
     let max_connections = pool_opts.maximum.clone();
@@ -189,9 +185,7 @@ fn connection_pool_claim() {
 fn connection_pool_stop() {
     let plain = slog_term::PlainSyncDecorator::new(std::io::stdout());
     let log = Logger::root(
-        Mutex::new(
-            slog_term::FullFormat::new(plain).build()
-        ).fuse(),
+        Mutex::new(slog_term::FullFormat::new(plain).build()).fuse(),
         o!("build-id" => "0.1.0")
     );
 
@@ -207,7 +201,8 @@ fn connection_pool_stop() {
         maximum: 3,
         claim_timeout: Some(1000),
         resolver: resolver,
-        log: log.clone()
+        log: log.clone(),
+        rebalancer_action_delay: None
     };
 
     let max_connections = pool_opts.maximum.clone();
@@ -228,16 +223,13 @@ fn connection_pool_stop() {
     assert!(stop_result.is_ok());
 }
 
-
 // TODO: Use quickcheck for this test. At very least the max_connections count
 // could be easily generated.
 #[test]
 fn connection_pool_accounting() {
     let plain = slog_term::PlainSyncDecorator::new(std::io::stdout());
     let log = Logger::root(
-        Mutex::new(
-            slog_term::FullFormat::new(plain).build()
-        ).fuse(),
+        Mutex::new(slog_term::FullFormat::new(plain).build()).fuse(),
         o!("build-id" => "0.1.0")
     );
 
@@ -253,7 +245,8 @@ fn connection_pool_accounting() {
         maximum: 3,
         claim_timeout: Some(1000),
         resolver: resolver,
-        log: log.clone()
+        log: log.clone(),
+        rebalancer_action_delay: None
     };
 
     let max_connections: ConnectionCount = pool_opts.maximum.clone().into();
@@ -285,7 +278,7 @@ fn connection_pool_accounting() {
     assert!(m_stats_check1.is_some());
     let stats_check1 = m_stats_check1.unwrap();
     assert_eq!(stats_check1.total_connections, max_connections);
-    assert_eq!(stats_check1.idle_connections, max_connections-1.into());
+    assert_eq!(stats_check1.idle_connections, max_connections - 1.into());
     assert_eq!(stats_check1.pending_connections, 0.into());
 
     let conn_result2 = pool.claim();
@@ -295,7 +288,7 @@ fn connection_pool_accounting() {
     assert!(m_stats_check2.is_some());
     let stats_check2 = m_stats_check2.unwrap();
     assert_eq!(stats_check2.total_connections, max_connections);
-    assert_eq!(stats_check2.idle_connections, max_connections-2.into());
+    assert_eq!(stats_check2.idle_connections, max_connections - 2.into());
     assert_eq!(stats_check2.pending_connections, 0.into());
 
     let conn_result3 = pool.claim();
@@ -305,7 +298,7 @@ fn connection_pool_accounting() {
     assert!(m_stats_check3.is_some());
     let stats_check3 = m_stats_check3.unwrap();
     assert_eq!(stats_check3.total_connections, max_connections);
-    assert_eq!(stats_check3.idle_connections, max_connections-3.into());
+    assert_eq!(stats_check3.idle_connections, max_connections - 3.into());
     assert_eq!(stats_check3.pending_connections, 0.into());
 
     drop(conn_result3);
@@ -314,7 +307,7 @@ fn connection_pool_accounting() {
     assert!(m_stats_check4.is_some());
     let stats_check4 = m_stats_check4.unwrap();
     assert_eq!(stats_check4.total_connections, max_connections);
-    assert_eq!(stats_check4.idle_connections, max_connections-2.into());
+    assert_eq!(stats_check4.idle_connections, max_connections - 2.into());
     assert_eq!(stats_check4.pending_connections, 0.into());
 
     drop(conn_result2);
@@ -323,7 +316,7 @@ fn connection_pool_accounting() {
     assert!(m_stats_check5.is_some());
     let stats_check5 = m_stats_check5.unwrap();
     assert_eq!(stats_check5.total_connections, max_connections);
-    assert_eq!(stats_check5.idle_connections, max_connections-1.into());
+    assert_eq!(stats_check5.idle_connections, max_connections - 1.into());
     assert_eq!(stats_check5.pending_connections, 0.into());
 
     drop(conn_result1);

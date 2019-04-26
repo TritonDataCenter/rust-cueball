@@ -49,7 +49,7 @@ pub enum BackendMsg {
     RemovedMsg(BackendRemovedMsg),
     // For internal pool use only
     #[doc(hidden)]
-    StopMsg
+    StopMsg,
 }
 
 /// Returned from the functions used by the connection pool to add or remove
@@ -58,5 +58,5 @@ pub enum BackendAction {
     /// Indicates a new backend was added by the connection pool.
     BackendAdded,
     /// Indicates an existing backend was removed by the connection pool.
-    BackendRemoved
+    BackendRemoved,
 }

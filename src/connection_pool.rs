@@ -7,7 +7,7 @@ pub mod types;
 use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::marker::PhantomData;
-use std::ops::DerefMut;
+use std::ops::{Deref, DerefMut};
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering as AtomicOrdering;
 use std::sync::mpsc::{channel, Receiver, Sender};
@@ -56,7 +56,7 @@ impl<C, R, F> Clone for ConnectionPool<C, R, F>
 where
     C: Connection,
     R: Resolver,
-    F: FnMut(&Backend) -> C + Send + Sync
+    F: FnMut(&Backend) -> C
 {
     fn clone(&self) -> ConnectionPool<C, R, F> {
         ConnectionPool {
@@ -82,7 +82,7 @@ impl<C, R, F> ConnectionPool<C, R, F>
 where
     C: Connection,
     R: Resolver,
-    F: FnMut(&Backend) -> C + Send + Sync + 'static
+    F: FnMut(&Backend) -> C + Send + 'static
 {
     pub fn new(
         cpo: ConnectionPoolOptions,
@@ -100,8 +100,6 @@ where
         let (resolver_tx, resolver_rx) = channel();
 
         let barrier = Arc::new(Barrier::new(2));
-
-        // let mut resolver = cpo.resolver;
 
         // Spawn a thread to run the resolver
         let barrier_clone = barrier.clone();
@@ -503,7 +501,7 @@ pub struct PoolConnection<C, R, F>
 where
     C: Connection,
     R: Resolver,
-    F: FnMut(&Backend) -> C + Send + Sync + 'static
+    F: FnMut(&Backend) -> C + Send + 'static
 {
     connection_pool: ConnectionPool<C, R, F>,
     connection_pair: ConnectionKeyPair<C>
@@ -513,7 +511,7 @@ impl<C, R, F> Drop for PoolConnection<C, R, F>
 where
     C: Connection,
     R: Resolver,
-    F: FnMut(&Backend) -> C + Send + Sync
+    F: FnMut(&Backend) -> C + Send
 {
     fn drop(&mut self) {
         let ConnectionKeyPair((key, m_conn)) = &mut self.connection_pair;
@@ -534,6 +532,30 @@ where
                 );
             }
         }
+    }
+}
+
+impl<C, R, F> Deref for PoolConnection<C, R, F>
+where
+    C: Connection,
+    R: Resolver,
+    F: FnMut(&Backend) -> C + Send
+{
+    type Target = C;
+
+    fn deref(&self) -> &C {
+        &(self.connection_pair.0).1.as_ref().unwrap()
+    }
+}
+
+impl<C, R, F> DerefMut for PoolConnection<C, R, F>
+where
+    C: Connection,
+    R: Resolver,
+    F: FnMut(&Backend) -> C + Send
+{
+    fn deref_mut(&mut self) -> &mut C {
+        (self.connection_pair.0).1.as_mut().unwrap()
     }
 }
 
@@ -712,7 +734,7 @@ fn add_connections<C, F>(
     create_connection: &mut F
 ) where
     C: Connection,
-    F: FnMut(&Backend) -> C + Send + Sync
+    F: FnMut(&Backend) -> C
 {
     connection_counts.iter().for_each(|(b_key, b_count)| {
         for _ in 0..b_count.clone().into() {
@@ -833,7 +855,7 @@ fn rebalancer_loop<C, F>(
     mut create_connection: F,
 ) where
     C: Connection,
-    F: FnMut(&Backend) -> C + Send + Sync
+    F: FnMut(&Backend) -> C
 {
     let mut done = stop.load(AtomicOrdering::Relaxed);
 

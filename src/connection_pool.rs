@@ -7,7 +7,7 @@ pub mod types;
 use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::marker::PhantomData;
-use std::ops::DerefMut;
+use std::ops::{Deref, DerefMut};
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering as AtomicOrdering;
 use std::sync::mpsc::{channel, Receiver, Sender};
@@ -16,14 +16,16 @@ use std::{thread, time};
 
 use slog::{debug, error, info, warn, Logger};
 
-use crate::backend::BackendKey;
+use crate::backend::{Backend, BackendKey};
 use crate::connection::Connection;
 use crate::connection_pool::types::{
-    ConnectionCount, ConnectionData, ConnectionKeyPair, ConnectionPoolOptions, ConnectionPoolState,
-    ConnectionPoolStats, ProtectedData, RebalanceCheck,
+    ConnectionCount, ConnectionData, ConnectionKeyPair, ConnectionPoolOptions,
+    ConnectionPoolState, ConnectionPoolStats, ProtectedData, RebalanceCheck
 };
 use crate::error::Error;
-use crate::resolver::{BackendAction, BackendAddedMsg, BackendMsg, BackendRemovedMsg, Resolver};
+use crate::resolver::{
+    BackendAction, BackendAddedMsg, BackendMsg, BackendRemovedMsg, Resolver
+};
 
 // General TODOs
 // * Decoherence
@@ -32,7 +34,8 @@ const DEFAULT_REBALANCE_ACTION_DELAY: u64 = 100;
 
 /// A pool of connections to a multi-node service
 #[derive(Debug)]
-pub struct ConnectionPool<C, R> {
+pub struct ConnectionPool<C, R, F>
+{
     protected_data: ProtectedData<C>,
     last_error: Option<Error>,
     resolver_thread: Option<thread::JoinHandle<()>>,
@@ -45,15 +48,17 @@ pub struct ConnectionPool<C, R> {
     rebalancer_stop: Arc<AtomicBool>,
     log: Logger,
     state: ConnectionPoolState,
-    _resolver: PhantomData<R>
+    _resolver: PhantomData<R>,
+    _connection_function: PhantomData<F>
 }
 
-impl<C, R> Clone for ConnectionPool<C, R>
+impl<C, R, F> Clone for ConnectionPool<C, R, F>
 where
     C: Connection,
     R: Resolver,
+    F: FnMut(&Backend) -> C
 {
-    fn clone(&self) -> ConnectionPool<C, R> {
+    fn clone(&self) -> ConnectionPool<C, R, F> {
         ConnectionPool {
             protected_data: self.protected_data.clone(),
             last_error: None,
@@ -67,17 +72,23 @@ where
             rebalancer_stop: self.rebalancer_stop.clone(),
             log: self.log.clone(),
             state: self.state,
-            _resolver: PhantomData
+            _resolver: PhantomData,
+            _connection_function: PhantomData
         }
     }
 }
 
-impl<C, R> ConnectionPool<C, R>
+impl<C, R, F> ConnectionPool<C, R, F>
 where
     C: Connection,
     R: Resolver,
+    F: FnMut(&Backend) -> C + Send + 'static
 {
-    pub fn new(cpo: ConnectionPoolOptions<R>) -> Self {
+    pub fn new(
+        cpo: ConnectionPoolOptions,
+        mut resolver: R,
+        create_connection: F
+    ) -> Self {
         let connection_data = ConnectionData::new(cpo.maximum as usize);
 
         // Create a channel to receive notifications from the resolver. The
@@ -89,8 +100,6 @@ where
         let (resolver_tx, resolver_rx) = channel();
 
         let barrier = Arc::new(Barrier::new(2));
-
-        let mut resolver = cpo.resolver;
 
         // Spawn a thread to run the resolver
         let barrier_clone = barrier.clone();
@@ -116,7 +125,7 @@ where
                 resolver_rx,
                 protected_data_clone,
                 rebalancer_clone,
-                resolver_log_clone
+                resolver_log_clone,
             )
         });
 
@@ -138,7 +147,8 @@ where
                 protected_data_clone2,
                 rebalancer_clone2,
                 rebalancer_log_clone,
-                rebalancer_stop_clone
+                rebalancer_stop_clone,
+                create_connection,
             )
         });
 
@@ -155,7 +165,8 @@ where
             rebalancer_stop,
             log: cpo.log,
             state: ConnectionPoolState::Running,
-            _resolver: PhantomData
+            _resolver: PhantomData,
+            _connection_function: PhantomData
         };
 
         barrier.clone().wait();
@@ -295,7 +306,7 @@ where
         }
     }
 
-    pub fn claim(&self) -> Result<PoolConnection<C, R>, Error> {
+    pub fn claim(&self) -> Result<PoolConnection<C, R, F>, Error> {
         let mut connection_data_guard = self.protected_data.connection_data_lock();
         let mut connection_data = connection_data_guard.deref_mut();
         let mut waiting_for_connection = true;
@@ -341,7 +352,7 @@ where
                             waiting_for_connection = false;
                             result = Ok(PoolConnection {
                                 connection_pool: self.clone(),
-                                connection_pair: ConnectionKeyPair((key, Some(conn))),
+                                connection_pair: ConnectionKeyPair((key, Some(conn)))
                             });
                         }
                     }
@@ -380,11 +391,11 @@ where
         result
     }
 
-    pub fn try_claim(&self) -> Option<PoolConnection<C, R>> {
+    pub fn try_claim(&self) -> Option<PoolConnection<C, R, F>> {
         let mut connection_data_guard = self.protected_data.connection_data_lock();
         let mut connection_data = connection_data_guard.deref_mut();
         let mut waiting_for_connection = true;
-        let mut result: Option<PoolConnection<C, R>> = None;
+        let mut result: Option<PoolConnection<C, R, F>> = None;
 
         let mut unwanted_connection_counts: HashMap<BackendKey, ConnectionCount> =
             connection_data.unwanted_connection_counts.drain().collect();
@@ -428,7 +439,7 @@ where
                             waiting_for_connection = false;
                             result = Some(PoolConnection {
                                 connection_pool: self.clone(),
-                                connection_pair: ConnectionKeyPair((key, Some(conn))),
+                                connection_pair: ConnectionKeyPair((key, Some(conn)))
                             });
                         }
                     }
@@ -486,19 +497,21 @@ where
 
 /// A connection abstraction reprsenting a member of the pool
 #[derive(Debug)]
-pub struct PoolConnection<C, R>
+pub struct PoolConnection<C, R, F>
 where
     C: Connection,
     R: Resolver,
+    F: FnMut(&Backend) -> C + Send + 'static
 {
-    connection_pool: ConnectionPool<C, R>,
-    connection_pair: ConnectionKeyPair<C>,
+    connection_pool: ConnectionPool<C, R, F>,
+    connection_pair: ConnectionKeyPair<C>
 }
 
-impl<C, R> Drop for PoolConnection<C, R>
+impl<C, R, F> Drop for PoolConnection<C, R, F>
 where
     C: Connection,
     R: Resolver,
+    F: FnMut(&Backend) -> C + Send
 {
     fn drop(&mut self) {
         let ConnectionKeyPair((key, m_conn)) = &mut self.connection_pair;
@@ -519,6 +532,30 @@ where
                 );
             }
         }
+    }
+}
+
+impl<C, R, F> Deref for PoolConnection<C, R, F>
+where
+    C: Connection,
+    R: Resolver,
+    F: FnMut(&Backend) -> C + Send
+{
+    type Target = C;
+
+    fn deref(&self) -> &C {
+        &(self.connection_pair.0).1.as_ref().unwrap()
+    }
+}
+
+impl<C, R, F> DerefMut for PoolConnection<C, R, F>
+where
+    C: Connection,
+    R: Resolver,
+    F: FnMut(&Backend) -> C + Send
+{
+    fn deref_mut(&mut self) -> &mut C {
+        (self.connection_pair.0).1.as_mut().unwrap()
     }
 }
 
@@ -543,7 +580,6 @@ fn add_backend<C>(msg: BackendAddedMsg, protected_data: ProtectedData<C>) -> Opt
 where
     C: Connection,
 {
-    // Check if we already have enough connections
     let mut connection_data = protected_data.connection_data_lock();
 
     if !connection_data.backends.contains_key(&msg.key) {
@@ -690,13 +726,15 @@ where
     }
 }
 
-fn add_connections<C>(
+fn add_connections<C, F>(
     connection_counts: HashMap<BackendKey, ConnectionCount>,
     max_connections: u32,
     log: &Logger,
     protected_data: ProtectedData<C>,
+    create_connection: &mut F
 ) where
     C: Connection,
+    F: FnMut(&Backend) -> C
 {
     connection_counts.iter().for_each(|(b_key, b_count)| {
         for _ in 0..b_count.clone().into() {
@@ -727,7 +765,7 @@ fn add_connections<C>(
                 // Try to establish connection
                 let m_backend = connection_data.backends.get(b_key);
                 if let Some(backend) = m_backend {
-                    let mut conn = C::new(backend);
+                    let mut conn = create_connection(backend);
                     conn.connect()
                         .and_then(|_| {
                             // Update connection info and stats
@@ -807,15 +845,17 @@ fn resolver_recv_loop<C>(
     }
 }
 
-fn rebalancer_loop<C>(
+fn rebalancer_loop<C, F>(
     max_connections: u32,
     rebalance_action_delay: u64,
     protected_data: ProtectedData<C>,
     rebalance_check: RebalanceCheck,
     log: Logger,
     stop: Arc<AtomicBool>,
+    mut create_connection: F,
 ) where
     C: Connection,
+    F: FnMut(&Backend) -> C
 {
     let mut done = stop.load(AtomicOrdering::Relaxed);
 
@@ -844,6 +884,7 @@ fn rebalancer_loop<C>(
                     max_connections,
                     &log,
                     protected_data.clone(),
+                    &mut create_connection,
                 )
             }
             *rebalance = false;

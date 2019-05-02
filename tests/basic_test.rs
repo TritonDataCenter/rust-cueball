@@ -16,19 +16,21 @@ use cueball::resolver::{BackendAddedMsg, BackendMsg, Resolver};
 #[derive(Debug)]
 pub struct DummyConnection {
     addr: SocketAddr,
-    connected: bool
+    connected: bool,
 }
 
-impl Connection for DummyConnection {
+impl DummyConnection {
     fn new(b: &Backend) -> Self {
         let addr = SocketAddr::from((b.address, b.port));
 
         DummyConnection {
             addr: addr,
-            connected: false
+            connected: false,
         }
     }
+}
 
+impl Connection for DummyConnection {
     fn connect(&mut self) -> Result<(), Error> {
         self.connected = true;
         Ok(())
@@ -44,7 +46,7 @@ pub struct FakeResolver {
     backends: Vec<(BackendAddress, BackendPort)>,
     pool_tx: Option<Sender<BackendMsg>>,
     error: Option<Error>,
-    started: bool
+    started: bool,
 }
 
 impl FakeResolver {
@@ -53,7 +55,7 @@ impl FakeResolver {
             backends: backends,
             pool_tx: None,
             error: None,
-            started: false
+            started: false,
         }
     }
 }
@@ -66,7 +68,7 @@ impl Resolver for FakeResolver {
                 let backend_key = backend::srv_key(&backend);
                 let backend_msg = BackendMsg::AddedMsg(BackendAddedMsg {
                     key: backend_key,
-                    backend: backend
+                    backend: backend,
                 });
                 s.send(backend_msg).unwrap();
             });
@@ -95,7 +97,7 @@ fn connection_pool_claim() {
     let plain = slog_term::PlainSyncDecorator::new(std::io::stdout());
     let log = Logger::root(
         Mutex::new(slog_term::FullFormat::new(plain).build()).fuse(),
-        o!("build-id" => "0.1.0")
+        o!("build-id" => "0.1.0"),
     );
 
     // Only use one backend to keep the test deterministic. Cueball allows for
@@ -106,17 +108,20 @@ fn connection_pool_claim() {
 
     let resolver = FakeResolver::new(vec![be1]);
 
-    let pool_opts = ConnectionPoolOptions::<FakeResolver> {
+    let pool_opts = ConnectionPoolOptions {
         maximum: 3,
         claim_timeout: Some(1000),
-        resolver: resolver,
         log: log.clone(),
-        rebalancer_action_delay: None
+        rebalancer_action_delay: None,
     };
 
     let max_connections = pool_opts.maximum.clone();
 
-    let pool = ConnectionPool::<DummyConnection, FakeResolver>::new(pool_opts);
+    let pool = ConnectionPool::new(
+        pool_opts,
+        resolver,
+        DummyConnection::new,
+    );
 
     // Wait for total_connections to reach the maximum
     let mut all_conns_established = false;
@@ -186,7 +191,7 @@ fn connection_pool_stop() {
     let plain = slog_term::PlainSyncDecorator::new(std::io::stdout());
     let log = Logger::root(
         Mutex::new(slog_term::FullFormat::new(plain).build()).fuse(),
-        o!("build-id" => "0.1.0")
+        o!("build-id" => "0.1.0"),
     );
 
     // Only use one backend to keep the test deterministic. Cueball allows for
@@ -197,17 +202,20 @@ fn connection_pool_stop() {
 
     let resolver = FakeResolver::new(vec![be1]);
 
-    let pool_opts = ConnectionPoolOptions::<FakeResolver> {
+    let pool_opts = ConnectionPoolOptions {
         maximum: 3,
         claim_timeout: Some(1000),
-        resolver: resolver,
         log: log.clone(),
-        rebalancer_action_delay: None
+        rebalancer_action_delay: None,
     };
 
     let max_connections = pool_opts.maximum.clone();
 
-    let mut pool = ConnectionPool::<DummyConnection, FakeResolver>::new(pool_opts);
+    let mut pool = ConnectionPool::new(
+        pool_opts,
+        resolver,
+        DummyConnection::new,
+    );
 
     // Wait for total_connections to reach the maximum
     let mut all_conns_established = false;
@@ -230,7 +238,7 @@ fn connection_pool_accounting() {
     let plain = slog_term::PlainSyncDecorator::new(std::io::stdout());
     let log = Logger::root(
         Mutex::new(slog_term::FullFormat::new(plain).build()).fuse(),
-        o!("build-id" => "0.1.0")
+        o!("build-id" => "0.1.0"),
     );
 
     // Only use one backend to keep the test deterministic. Cueball allows for
@@ -241,17 +249,20 @@ fn connection_pool_accounting() {
 
     let resolver = FakeResolver::new(vec![be1]);
 
-    let pool_opts = ConnectionPoolOptions::<FakeResolver> {
+    let pool_opts = ConnectionPoolOptions {
         maximum: 3,
         claim_timeout: Some(1000),
-        resolver: resolver,
         log: log.clone(),
-        rebalancer_action_delay: None
+        rebalancer_action_delay: None,
     };
 
     let max_connections: ConnectionCount = pool_opts.maximum.clone().into();
 
-    let mut pool = ConnectionPool::<DummyConnection, FakeResolver>::new(pool_opts);
+    let mut pool = ConnectionPool::new(
+        pool_opts,
+        resolver,
+        DummyConnection::new,
+    );
 
     // Wait for total_connections to reach the maximum
     let mut all_conns_established = false;

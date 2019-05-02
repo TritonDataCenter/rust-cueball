@@ -16,10 +16,10 @@ use cueball::resolver::{BackendAddedMsg, BackendMsg, Resolver};
 #[derive(Debug)]
 pub struct DummyConnection {
     addr: SocketAddr,
-    connected: bool
+    connected: bool,
 }
 
-impl Connection for DummyConnection {
+impl DummyConnection {
     fn new(b: &Backend) -> Self {
         let addr = SocketAddr::from((b.address, b.port));
 
@@ -28,7 +28,9 @@ impl Connection for DummyConnection {
             connected: false,
         }
     }
+}
 
+impl Connection for DummyConnection {
     fn connect(&mut self) -> Result<(), Error> {
         self.connected = true;
         Ok(())
@@ -44,7 +46,7 @@ pub struct FakeResolver {
     backends: Vec<(BackendAddress, BackendPort)>,
     pool_tx: Option<Sender<BackendMsg>>,
     error: Option<Error>,
-    started: bool
+    started: bool,
 }
 
 impl FakeResolver {
@@ -53,7 +55,7 @@ impl FakeResolver {
             backends: backends,
             pool_tx: None,
             error: None,
-            started: false
+            started: false,
         }
     }
 }
@@ -66,7 +68,7 @@ impl Resolver for FakeResolver {
                 let backend_key = backend::srv_key(&backend);
                 let backend_msg = BackendMsg::AddedMsg(BackendAddedMsg {
                     key: backend_key,
-                    backend: backend
+                    backend: backend,
                 });
                 s.send(backend_msg).unwrap();
             });
@@ -94,7 +96,7 @@ fn main() {
     let plain = slog_term::PlainSyncDecorator::new(std::io::stdout());
     let log = Logger::root(
         Mutex::new(slog_term::FullFormat::new(plain).build()).fuse(),
-        o!("build-id" => "0.1.0")
+        o!("build-id" => "0.1.0"),
     );
 
     info!(log, "running basic cueball example");
@@ -106,15 +108,18 @@ fn main() {
 
     let resolver = FakeResolver::new(vec![be1, be2, be3]);
 
-    let pool_opts = ConnectionPoolOptions::<FakeResolver> {
+    let pool_opts = ConnectionPoolOptions {
         maximum: 3,
         claim_timeout: Some(1000),
-        resolver: resolver,
         log: log.clone(),
-        rebalancer_action_delay: None
+        rebalancer_action_delay: None,
     };
 
-    let pool = ConnectionPool::<DummyConnection, FakeResolver>::new(pool_opts);
+    let pool = ConnectionPool::new(
+        pool_opts,
+        resolver,
+        DummyConnection::new,
+    );
 
     // Backend initialization happens asynchronously so give the backends some
     // time to get started

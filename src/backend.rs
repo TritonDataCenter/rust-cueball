@@ -28,7 +28,7 @@ pub struct Backend {
     /// The address of the backend.
     pub address: BackendAddress,
     /// The port of the backend.
-    pub port: BackendPort
+    pub port: BackendPort,
 }
 
 impl Backend {
@@ -37,7 +37,7 @@ impl Backend {
         Backend {
             name: backend_name(address, port),
             address: *address,
-            port
+            port,
         }
     }
 }

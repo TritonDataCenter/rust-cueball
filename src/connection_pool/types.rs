@@ -22,7 +22,7 @@ pub struct ConnectionPoolStats {
     /// The count of idle connections in the pool
     pub idle_connections: ConnectionCount,
     /// The number of created, but not yet connected connections
-    pub pending_connections: ConnectionCount
+    pub pending_connections: ConnectionCount,
 }
 
 impl ConnectionPoolStats {
@@ -31,7 +31,7 @@ impl ConnectionPoolStats {
         ConnectionPoolStats {
             total_connections: ConnectionCount::from(0),
             idle_connections: ConnectionCount::from(0),
-            pending_connections: ConnectionCount::from(0)
+            pending_connections: ConnectionCount::from(0),
         }
     }
 }
@@ -45,21 +45,18 @@ impl Default for ConnectionPoolStats {
 /// The configuration options for a Cueball connection pool. This is required to
 /// instantiate a new connection pool.
 #[derive(Debug)]
-pub struct ConnectionPoolOptions<R> {
+pub struct ConnectionPoolOptions {
     /// The maximum number of connections to maintain in the connection pool.
     pub maximum: u32,
     /// An optional timeout for blocking calls to request a connection from the
     /// pool.
     pub claim_timeout: Option<u64>,
-    /// The implementation of [`Resolver`]: ../trait.Resolver.html that the
-    /// connection pool should use.
-    pub resolver: R,
     /// A `slog` logger instance.
     pub log: Logger,
     /// An optional delay time to avoid extra rebalancing work in case the
     /// resolver notifies the pool of multiple changes within a short
     /// period. The default is 100 milliseconds.
-    pub rebalancer_action_delay: Option<u64>
+    pub rebalancer_action_delay: Option<u64>,
 }
 
 // This type wraps a pair that associates a `BackendKey` with a connection of
@@ -127,8 +124,22 @@ where
 }
 
 /// A newtype wrapper around u32 used for counts of connections mainatained by the connection pool.
-#[derive( Add, AddAssign, Clone, Copy, Debug, Display, Eq, From, Into, Ord,
-    PartialOrd, PartialEq, Sub, SubAssign )]
+#[derive(
+    Add,
+    AddAssign,
+    Clone,
+    Copy,
+    Debug,
+    Display,
+    Eq,
+    From,
+    Into,
+    Ord,
+    PartialOrd,
+    PartialEq,
+    Sub,
+    SubAssign,
+)]
 pub struct ConnectionCount(u32);
 
 // The internal data structures used to manage the connection pool.
@@ -139,7 +150,7 @@ pub struct ConnectionData<C> {
     pub connections: VecDeque<ConnectionKeyPair<C>>,
     pub connection_distribution: HashMap<BackendKey, ConnectionCount>,
     pub unwanted_connection_counts: HashMap<BackendKey, ConnectionCount>,
-    pub stats: ConnectionPoolStats
+    pub stats: ConnectionPoolStats,
 }
 
 impl<C> ConnectionData<C>
@@ -153,7 +164,7 @@ where
             connections: VecDeque::with_capacity(max_size),
             connection_distribution: HashMap::with_capacity(max_size),
             unwanted_connection_counts: HashMap::with_capacity(max_size),
-            stats: ConnectionPoolStats::new()
+            stats: ConnectionPoolStats::new(),
         }
     }
 }
@@ -186,7 +197,7 @@ where
                 let wait_result = (self.0).1.wait_timeout(g, timeout).unwrap();
                 (wait_result.0, wait_result.1.timed_out())
             }
-            None => ((self.0).1.wait(g).unwrap(), false)
+            None => ((self.0).1.wait(g).unwrap(), false),
         }
     }
 
@@ -263,7 +274,7 @@ pub enum ConnectionPoolState {
     Stopping,
     /// The connection pool is stopped and is no longer accepting connection
     /// claim requests.
-    Stopped
+    Stopped,
 }
 
 impl fmt::Display for ConnectionPoolState {
@@ -271,7 +282,7 @@ impl fmt::Display for ConnectionPoolState {
         match self {
             ConnectionPoolState::Running => String::from("running").fmt(fmt),
             ConnectionPoolState::Stopping => String::from("stopping").fmt(fmt),
-            ConnectionPoolState::Stopped => String::from("stopped").fmt(fmt)
+            ConnectionPoolState::Stopped => String::from("stopped").fmt(fmt),
         }
     }
 }

@@ -12,6 +12,16 @@ use std::error;
 /// that implements the `Connection` trait.
 pub trait Connection: Send + Sized + 'static
 {
+    /// The error type returned by the `connect` or `close` functions. This
+    /// is an associated type for the trait meaning each specific implementation
+    /// of the `Connection` trait may choose the appropriate concrete error type
+    /// to return. The only constraint applied is that the selected error type
+    /// must implement the
+    /// [Error](https://doc.rust-lang.org/std/error/trait.Error.html) trait from
+    /// the standard library. This allows for the error to relevant to the
+    /// context of the `Connection` implementation while avoiding unnecessary
+    /// type parameters or having to coerce data between incompatible error
+    /// types.
     type Error: error::Error;
     /// Attempt to establish the connection to a backend. `Connection` trait
     /// implementors are provided with details about the backend when the

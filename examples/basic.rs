@@ -31,6 +31,8 @@ impl DummyConnection {
 }
 
 impl Connection for DummyConnection {
+    type Error = Error;
+
     fn connect(&mut self) -> Result<(), Error> {
         self.connected = true;
         Ok(())

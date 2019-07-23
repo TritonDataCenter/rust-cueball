@@ -300,9 +300,7 @@ where
             self.state = ConnectionPoolState::Stopped;
             Ok(())
         } else {
-            let err_str = "ConnectionPool clones may not stop the connection \
-                           pool.";
-            Err(Error::CueballError(String::from(err_str)))
+            Err(Error::StopCalledByClone)
         }
     }
 
@@ -310,7 +308,7 @@ where
         let mut connection_data_guard = self.protected_data.connection_data_lock();
         let mut connection_data = connection_data_guard.deref_mut();
         let mut waiting_for_connection = true;
-        let mut result = Err(Error::CueballError(String::from("dummy error")));
+        let mut result = Err(Error::DummyError);
 
         let mut unwanted_connection_counts: HashMap<BackendKey, ConnectionCount> =
             connection_data.unwanted_connection_counts.drain().collect();
@@ -358,13 +356,14 @@ where
                     }
                     Some(ConnectionKeyPair((_key, None))) => {
                         // Should never happen
-                        let err_msg = String::from("Found backend key with no connection");
+                        let err_msg = "Found backend key with no connection";
                         warn!(self.log, "{}", err_msg);
-                        result = Err(Error::CueballError(err_msg));
+                        result = Err(Error::BackendWithNoConnection);
                     }
                     None => {
-                        let err_msg = String::from("Unable to retrieve a connection");
-                        result = Err(Error::CueballError(err_msg));
+                        // This also should never happen here because we checked
+                        // if the queue was empty before entering the loop
+                        result = Err(Error::ConnectionRetrievalFailure);
                     }
                 }
             } else {
@@ -375,12 +374,7 @@ where
                 connection_data = connection_data_guard.deref_mut();
 
                 if wait_result.1 {
-                    let err_msg = String::from(
-                        "Unable to retrieve a \
-                         connection within the \
-                         claim timeout",
-                    );
-                    result = Err(Error::CueballError(err_msg));
+                    result = Err(Error::ClaimFailure);
                     waiting_for_connection = false;
                 }
             }

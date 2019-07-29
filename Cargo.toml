@@ -6,9 +6,13 @@ edition = "2018"
 
 [dependencies]
 base64 = "0.10.1"
+chrono = "0.4.7"
 derive_more = "0.14.0"
+rand = "0.7.0"
 sha1 = "0.6.0"
 slog = "2.4.1"
+priority-queue = "0.6.0"
+timer = "0.2.0"
 
 [dev-dependencies]
 slog-term = "2.4.0"

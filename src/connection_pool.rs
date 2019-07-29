@@ -26,11 +26,14 @@ use crate::error::Error;
 use crate::resolver::{
     BackendAction, BackendAddedMsg, BackendMsg, BackendRemovedMsg, Resolver
 };
+extern crate timer;
+extern crate chrono;
 
 // General TODOs
 // * Decoherence
 
 const DEFAULT_REBALANCE_ACTION_DELAY: u64 = 100;
+const DEFAULT_DECOHERENCE_INTERVAL: i64 = 60;
 
 /// A pool of connections to a multi-node service
 #[derive(Debug)]
@@ -140,6 +143,9 @@ where
         let rebalancer_action_delay = cpo
             .rebalancer_action_delay
             .unwrap_or(DEFAULT_REBALANCE_ACTION_DELAY);
+        let decoherence_interval = cpo
+            .decoherence_interval
+            .unwrap_or(DEFAULT_DECOHERENCE_INTERVAL);
         let rebalance_thread = thread::spawn(move || {
             rebalancer_loop(
                 max_connections,
@@ -168,6 +174,16 @@ where
             _resolver: PhantomData,
             _connection_function: PhantomData
         };
+
+        let timer = timer::Timer::new();
+        let _guard = timer.schedule_with_delay(chrono::Duration::seconds(decoherence_interval), move || {
+            reshuffle_connection_queue(
+                protected_data_clone2,
+                rebalancer_clone2,
+                rebalancer_log_clone,
+                rebalancer_stop_clone,
+            );
+        });
 
         barrier.clone().wait();
         pool
@@ -496,7 +512,7 @@ where
 }
 
 /// A connection abstraction reprsenting a member of the pool
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct PoolConnection<C, R, F>
 where
     C: Connection,
@@ -893,3 +909,55 @@ fn rebalancer_loop<C, F>(
         done = stop.load(AtomicOrdering::Relaxed);
     }
 }
+
+fn reshuffle_connection_queue<C> (
+    protected_data: ProtectedData<C>,
+    rebalance_check: RebalanceCheck,
+    log: Logger,
+    stop: Arc<AtomicBool>
+)
+where
+    C: Connection
+{
+    debug!(log, "Performing connection decoherence shuffle...");
+
+    let mut rebalance = rebalance_check.get_lock();
+    let mut connection_data = protected_data.connection_data_lock();
+
+    rebalance = rebalance_check.condvar_wait(rebalance);
+
+    if *rebalance {
+        shuffle(&mut connection_data, rand::thread_rng());
+    }
+}
+// For use with shuffle
+trait LenAndSwap {
+    fn len(&self) -> usize;
+    fn swap(&mut self, i: usize, j: usize);
+}
+
+// VecDeque trivially fulfills the LenAndSwap requirement, but
+// we have to spell it out.
+impl<T> LenAndSwap for VecDeque<T> {
+    fn len(&self) -> usize {
+        self.len()
+    }
+    fn swap(&mut self, i: usize, j: usize) {
+        self.swap(i, j)
+    }
+}
+
+// An exact copy of rand::Rng::shuffle, with the signature modified to
+// accept any type that implements LenAndSwap
+fn shuffle<T, R>(values: &mut T, mut rng: R)
+    where T: LenAndSwap,
+          R: rand::Rng {
+    let mut i = values.len();
+    while i >= 2 {
+        // invariant: elements with index >= i have been locked in place.
+        i -= 1;
+        // lock element i in place.
+        values.swap(i, rng.gen_range(0, i + 1));
+    }
+}
+

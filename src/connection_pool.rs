@@ -5,7 +5,7 @@
 pub mod types;
 
 use std::cmp::Ordering;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut};
 use std::sync::atomic::AtomicBool;
@@ -49,6 +49,7 @@ pub struct ConnectionPool<C, R, F>
     rebalance_check: RebalanceCheck,
     rebalance_thread: Option<thread::JoinHandle<()>>,
     rebalancer_stop: Arc<AtomicBool>,
+    decoherence_interval: Option<i64>,
     log: Logger,
     state: ConnectionPoolState,
     _resolver: PhantomData<R>,
@@ -73,6 +74,7 @@ where
             rebalance_check: self.rebalance_check.clone(),
             rebalance_thread: None,
             rebalancer_stop: self.rebalancer_stop.clone(),
+            decoherence_interval: self.decoherence_interval,
             log: self.log.clone(),
             state: self.state,
             _resolver: PhantomData,
@@ -85,7 +87,7 @@ impl<C, R, F> ConnectionPool<C, R, F>
 where
     C: Connection,
     R: Resolver,
-    F: FnMut(&Backend) -> C + Send + 'static
+    F: FnMut(&Backend) -> C + Send +Sync + 'static
 {
     pub fn new(
         cpo: ConnectionPoolOptions,
@@ -158,6 +160,11 @@ where
             )
         });
 
+        start_decoherence(decoherence_interval, protected_data.clone(), cpo.log.clone());
+
+        let sleep_time = time::Duration::from_millis(20000);
+        thread::sleep(sleep_time);
+        
         let pool = ConnectionPool {
             protected_data,
             last_error: None,
@@ -169,21 +176,13 @@ where
             rebalance_check: rebalancer_check,
             rebalance_thread: Some(rebalance_thread),
             rebalancer_stop,
+            decoherence_interval: Some(decoherence_interval),
             log: cpo.log,
             state: ConnectionPoolState::Running,
             _resolver: PhantomData,
             _connection_function: PhantomData
         };
 
-        let timer = timer::Timer::new();
-        let _guard = timer.schedule_with_delay(chrono::Duration::seconds(decoherence_interval), move || {
-            reshuffle_connection_queue(
-                protected_data_clone2,
-                rebalancer_clone2,
-                rebalancer_log_clone,
-                rebalancer_stop_clone,
-            );
-        });
 
         barrier.clone().wait();
         pool
@@ -509,6 +508,7 @@ where
         connection_data.stats.idle_connections += 1.into();
         self.protected_data.condvar_notify();
     }
+
 }
 
 /// A connection abstraction reprsenting a member of the pool
@@ -517,7 +517,7 @@ pub struct PoolConnection<C, R, F>
 where
     C: Connection,
     R: Resolver,
-    F: FnMut(&Backend) -> C + Send + 'static
+    F: FnMut(&Backend) -> C + Send + Sync + 'static
 {
     connection_pool: ConnectionPool<C, R, F>,
     connection_pair: ConnectionKeyPair<C>
@@ -527,7 +527,7 @@ impl<C, R, F> Drop for PoolConnection<C, R, F>
 where
     C: Connection,
     R: Resolver,
-    F: FnMut(&Backend) -> C + Send
+    F: FnMut(&Backend) -> C + Send + Sync
 {
     fn drop(&mut self) {
         let ConnectionKeyPair((key, m_conn)) = &mut self.connection_pair;
@@ -555,7 +555,7 @@ impl<C, R, F> Deref for PoolConnection<C, R, F>
 where
     C: Connection,
     R: Resolver,
-    F: FnMut(&Backend) -> C + Send
+    F: FnMut(&Backend) -> C + Send + Sync
 {
     type Target = C;
 
@@ -568,7 +568,7 @@ impl<C, R, F> DerefMut for PoolConnection<C, R, F>
 where
     C: Connection,
     R: Resolver,
-    F: FnMut(&Backend) -> C + Send
+    F: FnMut(&Backend) -> C + Send + Sync
 {
     fn deref_mut(&mut self) -> &mut C {
         (self.connection_pair.0).1.as_mut().unwrap()
@@ -910,41 +910,36 @@ fn rebalancer_loop<C, F>(
     }
 }
 
-fn reshuffle_connection_queue<C> (
+fn start_decoherence<C>(
+    decoherence_interval: i64,
     protected_data: ProtectedData<C>,
-    rebalance_check: RebalanceCheck,
     log: Logger,
-    stop: Arc<AtomicBool>
-)
-where
+) where
+    C: Connection
+{
+    debug!(log, "starting decoherence every {} seconds", decoherence_interval);
+    let timer = timer::Timer::new();
+    let _guard = timer.schedule_with_delay(chrono::Duration::seconds(decoherence_interval), move || {
+        reshuffle_connection_queue(protected_data.clone(), log.clone());
+    });
+}
+
+fn reshuffle_connection_queue<C>(
+    protected_data: ProtectedData<C>,
+    log: Logger,
+) where
     C: Connection
 {
     debug!(log, "Performing connection decoherence shuffle...");
 
-    let mut rebalance = rebalance_check.get_lock();
     let mut connection_data = protected_data.connection_data_lock();
 
-    rebalance = rebalance_check.condvar_wait(rebalance);
-
-    if *rebalance {
-        shuffle(&mut connection_data, rand::thread_rng());
-    }
+    shuffle(&mut connection_data.connections, rand::thread_rng());
 }
-// For use with shuffle
+
 trait LenAndSwap {
     fn len(&self) -> usize;
     fn swap(&mut self, i: usize, j: usize);
-}
-
-// VecDeque trivially fulfills the LenAndSwap requirement, but
-// we have to spell it out.
-impl<T> LenAndSwap for VecDeque<T> {
-    fn len(&self) -> usize {
-        self.len()
-    }
-    fn swap(&mut self, i: usize, j: usize) {
-        self.swap(i, j)
-    }
 }
 
 // An exact copy of rand::Rng::shuffle, with the signature modified to
@@ -958,6 +953,15 @@ fn shuffle<T, R>(values: &mut T, mut rng: R)
         i -= 1;
         // lock element i in place.
         values.swap(i, rng.gen_range(0, i + 1));
+    }
+}
+
+impl<T> LenAndSwap for VecDeque<T> {
+    fn len(&self) -> usize {
+        self.len()
+    }
+    fn swap(&mut self, i: usize, j: usize) {
+        self.swap(i, j)
     }
 }
 

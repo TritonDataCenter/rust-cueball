@@ -114,6 +114,7 @@ fn connection_pool_claim() {
         maximum: 3,
         claim_timeout: Some(1000),
         log: log.clone(),
+        decoherence_interval: Some(60),
         rebalancer_action_delay: None,
     };
 
@@ -208,6 +209,7 @@ fn connection_pool_stop() {
         maximum: 3,
         claim_timeout: Some(1000),
         log: log.clone(),
+        decoherence_interval: Some(60),
         rebalancer_action_delay: None,
     };
 
@@ -255,6 +257,7 @@ fn connection_pool_accounting() {
         maximum: 3,
         claim_timeout: Some(1000),
         log: log.clone(),
+        decoherence_interval: Some(60),
         rebalancer_action_delay: None,
     };
 

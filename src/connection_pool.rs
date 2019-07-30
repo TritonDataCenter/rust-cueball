@@ -162,9 +162,6 @@ where
 
         start_decoherence(decoherence_interval, protected_data.clone(), cpo.log.clone());
 
-        let sleep_time = time::Duration::from_millis(20000);
-        thread::sleep(sleep_time);
-        
         let pool = ConnectionPool {
             protected_data,
             last_error: None,
@@ -919,8 +916,8 @@ fn start_decoherence<C>(
 {
     debug!(log, "starting decoherence every {} seconds", decoherence_interval);
     let timer = timer::Timer::new();
-    let _guard = timer.schedule_with_delay(chrono::Duration::seconds(decoherence_interval), move || {
-        reshuffle_connection_queue(protected_data.clone(), log.clone());
+    let _guard = timer.schedule_repeating(chrono::Duration::seconds(decoherence_interval), move || {
+        reshuffle_connection_queue(protected_data.clone(), log.clone())
     });
 }
 

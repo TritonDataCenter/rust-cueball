@@ -1,7 +1,7 @@
 [package]
 name = "cueball"
 version = "0.1.0"
-authors = ["Kelly McLaughlin <kelly.mclaughlin@joyent.com>"]
+authors = ["Kelly McLaughlin <kelly.mclaughlin@joyent.com>", "Jon Anderson <jon.anderson@joyent.com>"]
 edition = "2018"
 
 [dependencies]
@@ -13,6 +13,7 @@ sha1 = "0.6.0"
 slog = "2.4.1"
 priority-queue = "0.6.0"
 timer = "0.2.0"
+tokio = "0.1.22"
 
 [dev-dependencies]
 slog-term = "2.4.0"

@@ -60,7 +60,7 @@ pub struct ConnectionPoolOptions {
     /// resolver notifies the pool of multiple changes within a short
     /// period. The default is 100 milliseconds.
     pub rebalancer_action_delay: Option<u64>,
-    pub decoherence_interval: Option<i64>,
+    pub decoherence_interval: Option<u64>,
 }
 
 // This type wraps a pair that associates a `BackendKey` with a connection of
@@ -291,19 +291,3 @@ impl fmt::Display for ConnectionPoolState {
     }
 }
 
-// For use with shuffle
-pub trait LenAndSwap {
-    fn len(&self) -> usize;
-    fn swap(&mut self, i: usize, j: usize);
-}
-
-// VecDeque trivially fulfills the LenAndSwap requirement, but
-// we have to spell it out.
-impl<T> LenAndSwap for VecDeque<T> {
-    fn len(&self) -> usize {
-        self.len()
-    }
-    fn swap(&mut self, i: usize, j: usize) {
-        self.swap(i, j)
-    }
-}

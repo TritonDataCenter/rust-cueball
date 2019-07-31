@@ -13,6 +13,8 @@ use std::sync::atomic::Ordering as AtomicOrdering;
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Barrier};
 use std::{thread, time};
+use std::time::{Duration, Instant};
+
 
 use slog::{debug, error, info, warn, Logger};
 
@@ -26,14 +28,14 @@ use crate::error::Error;
 use crate::resolver::{
     BackendAction, BackendAddedMsg, BackendMsg, BackendRemovedMsg, Resolver
 };
-extern crate timer;
-extern crate chrono;
+use tokio::prelude::*;
+use tokio::timer::Interval;
 
 // General TODOs
 // * Decoherence
 
 const DEFAULT_REBALANCE_ACTION_DELAY: u64 = 100;
-const DEFAULT_DECOHERENCE_INTERVAL: i64 = 60;
+const DEFAULT_DECOHERENCE_INTERVAL: u64 = 60;
 
 /// A pool of connections to a multi-node service
 #[derive(Debug)]
@@ -49,7 +51,7 @@ pub struct ConnectionPool<C, R, F>
     rebalance_check: RebalanceCheck,
     rebalance_thread: Option<thread::JoinHandle<()>>,
     rebalancer_stop: Arc<AtomicBool>,
-    decoherence_interval: Option<i64>,
+    decoherence_interval: Option<u64>,
     log: Logger,
     state: ConnectionPoolState,
     _resolver: PhantomData<R>,
@@ -159,8 +161,11 @@ where
                 create_connection,
             )
         });
-
-        start_decoherence(decoherence_interval, protected_data.clone(), cpo.log.clone());
+        start_decoherence(
+            decoherence_interval,
+            protected_data.clone(),
+            cpo.log.clone(),
+        );
 
         let pool = ConnectionPool {
             protected_data,
@@ -908,17 +913,26 @@ fn rebalancer_loop<C, F>(
 }
 
 fn start_decoherence<C>(
-    decoherence_interval: i64,
+    decoherence_interval: u64,
     protected_data: ProtectedData<C>,
     log: Logger,
 ) where
     C: Connection
 {
-    debug!(log, "starting decoherence every {} seconds", decoherence_interval);
-    let timer = timer::Timer::new();
-    let _guard = timer.schedule_repeating(chrono::Duration::seconds(decoherence_interval), move || {
-        reshuffle_connection_queue(protected_data.clone(), log.clone())
-    });
+    debug!(log, "starting decoherence task, interval {} seconds", decoherence_interval);
+    let log1 = log.clone();
+
+    let task = Interval::new(Instant::now(), Duration::from_secs(decoherence_interval))
+    .for_each(move |_| {
+        debug!(log, "running decoherence");
+        reshuffle_connection_queue(protected_data.clone(), log.clone());
+        debug!(log, "done running decoherence");
+        Ok(())
+    })
+    .map_err(|e| panic!("interval errored; err={:?}", e));
+
+    thread::spawn(move || { tokio::run(task); });
+    debug!(log1, "started task!");
 }
 
 fn reshuffle_connection_queue<C>(
@@ -932,6 +946,7 @@ fn reshuffle_connection_queue<C>(
     let mut connection_data = protected_data.connection_data_lock();
 
     shuffle(&mut connection_data.connections, rand::thread_rng());
+
 }
 
 trait LenAndSwap {

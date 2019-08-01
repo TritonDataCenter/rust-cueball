@@ -5,7 +5,7 @@
 pub mod types;
 
 use std::cmp::Ordering;
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap};
 use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut};
 use std::sync::atomic::AtomicBool;
@@ -22,7 +22,7 @@ use crate::backend::{Backend, BackendKey};
 use crate::connection::Connection;
 use crate::connection_pool::types::{
     ConnectionCount, ConnectionData, ConnectionKeyPair, ConnectionPoolOptions,
-    ConnectionPoolState, ConnectionPoolStats, ProtectedData, RebalanceCheck
+    ConnectionPoolState, ConnectionPoolStats, ProtectedData, RebalanceCheck, ShuffleCollection,
 };
 use crate::error::Error;
 use crate::resolver::{
@@ -949,15 +949,10 @@ fn reshuffle_connection_queue<C>(
 
 }
 
-trait LenAndSwap {
-    fn len(&self) -> usize;
-    fn swap(&mut self, i: usize, j: usize);
-}
-
 // An exact copy of rand::Rng::shuffle, with the signature modified to
 // accept any type that implements LenAndSwap
 fn shuffle<T, R>(values: &mut T, mut rng: R)
-    where T: LenAndSwap,
+    where T: ShuffleCollection,
           R: rand::Rng {
     let mut i = values.len();
     while i >= 2 {
@@ -967,13 +962,3 @@ fn shuffle<T, R>(values: &mut T, mut rng: R)
         values.swap(i, rng.gen_range(0, i + 1));
     }
 }
-
-impl<T> LenAndSwap for VecDeque<T> {
-    fn len(&self) -> usize {
-        self.len()
-    }
-    fn swap(&mut self, i: usize, j: usize) {
-        self.swap(i, j)
-    }
-}
-

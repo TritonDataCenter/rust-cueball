@@ -291,3 +291,16 @@ impl fmt::Display for ConnectionPoolState {
     }
 }
 
+pub trait ShuffleCollection {
+    fn len(&self) -> usize;
+    fn swap(&mut self, i: usize, j: usize);
+}
+
+impl<T> ShuffleCollection for VecDeque<T> {
+    fn len(&self) -> usize {
+        self.len()
+    }
+    fn swap(&mut self, i: usize, j: usize) {
+        self.swap(i, j)
+    }
+}

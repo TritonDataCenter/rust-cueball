@@ -16,7 +16,7 @@ use std::{thread, time};
 use std::time::{Duration, Instant};
 
 
-use slog::{trace, debug, error, info, warn, Logger};
+use slog::{debug, error, info, warn, Logger};
 
 use crate::backend::{Backend, BackendKey};
 use crate::connection::Connection;
@@ -928,7 +928,6 @@ fn start_decoherence<C>(
     C: Connection
 {
     debug!(log, "starting decoherence task, interval {} seconds", decoherence_interval);
-    let log1 = log.clone();
 
     // brief sleep before starting up to give the connection pool time to settle.
     let sleep_time = time::Duration::from_millis(decoherence_delay);
@@ -944,7 +943,6 @@ fn start_decoherence<C>(
     .map_err(|e| panic!("interval errored; err={:?}", e));
 
     thread::spawn(move || { tokio::run(task); });
-    debug!(log1, "started task!");
 }
 
 fn reshuffle_connection_queue<C>(

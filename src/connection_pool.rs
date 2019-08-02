@@ -16,7 +16,7 @@ use std::{thread, time};
 use std::time::{Duration, Instant};
 
 
-use slog::{debug, error, info, warn, Logger};
+use slog::{trace, debug, error, info, warn, Logger};
 
 use crate::backend::{Backend, BackendKey};
 use crate::connection::Connection;
@@ -31,11 +31,10 @@ use crate::resolver::{
 use tokio::prelude::*;
 use tokio::timer::Interval;
 
-// General TODOs
-// * Decoherence
 
 const DEFAULT_REBALANCE_ACTION_DELAY: u64 = 100;
 const DEFAULT_DECOHERENCE_INTERVAL: u64 = 60;
+const DEFAULT_DECOHERENCE_DELAY: u64 = 100;
 
 /// A pool of connections to a multi-node service
 #[derive(Debug)]
@@ -52,6 +51,7 @@ pub struct ConnectionPool<C, R, F>
     rebalance_thread: Option<thread::JoinHandle<()>>,
     rebalancer_stop: Arc<AtomicBool>,
     decoherence_interval: Option<u64>,
+    decoherence_delay: Option<u64>,
     log: Logger,
     state: ConnectionPoolState,
     _resolver: PhantomData<R>,
@@ -77,6 +77,7 @@ where
             rebalance_thread: None,
             rebalancer_stop: self.rebalancer_stop.clone(),
             decoherence_interval: self.decoherence_interval,
+            decoherence_delay: self.decoherence_delay,
             log: self.log.clone(),
             state: self.state,
             _resolver: PhantomData,
@@ -147,10 +148,7 @@ where
         let rebalancer_action_delay = cpo
             .rebalancer_action_delay
             .unwrap_or(DEFAULT_REBALANCE_ACTION_DELAY);
-        let decoherence_interval = cpo
-            .decoherence_interval
-            .unwrap_or(DEFAULT_DECOHERENCE_INTERVAL);
-        let rebalance_thread = thread::spawn(move || {
+       let rebalance_thread = thread::spawn(move || {
             rebalancer_loop(
                 max_connections,
                 rebalancer_action_delay,
@@ -161,8 +159,15 @@ where
                 create_connection,
             )
         });
+        let decoherence_interval = cpo
+            .decoherence_interval
+            .unwrap_or(DEFAULT_DECOHERENCE_INTERVAL);
+        let decoherence_delay = cpo
+            .decoherence_delay
+            .unwrap_or(DEFAULT_DECOHERENCE_DELAY);
         start_decoherence(
             decoherence_interval,
+            decoherence_delay,
             protected_data.clone(),
             cpo.log.clone(),
         );
@@ -179,6 +184,7 @@ where
             rebalance_thread: Some(rebalance_thread),
             rebalancer_stop,
             decoherence_interval: Some(decoherence_interval),
+            decoherence_delay: Some(decoherence_interval),
             log: cpo.log,
             state: ConnectionPoolState::Running,
             _resolver: PhantomData,
@@ -912,8 +918,10 @@ fn rebalancer_loop<C, F>(
     }
 }
 
+/// Start a thread to run periodic decoherence on the connection pool
 fn start_decoherence<C>(
     decoherence_interval: u64,
+    decoherence_delay: u64,
     protected_data: ProtectedData<C>,
     log: Logger,
 ) where
@@ -921,6 +929,10 @@ fn start_decoherence<C>(
 {
     debug!(log, "starting decoherence task, interval {} seconds", decoherence_interval);
     let log1 = log.clone();
+
+    // brief sleep before starting up to give the connection pool time to settle.
+    let sleep_time = time::Duration::from_millis(decoherence_delay);
+    thread::sleep(sleep_time);
 
     let task = Interval::new(Instant::now(), Duration::from_secs(decoherence_interval))
     .for_each(move |_| {
@@ -944,21 +956,19 @@ fn reshuffle_connection_queue<C>(
     debug!(log, "Performing connection decoherence shuffle...");
 
     let mut connection_data = protected_data.connection_data_lock();
-
-    shuffle(&mut connection_data.connections, rand::thread_rng());
+    shuffle(&mut connection_data.connections, rand::thread_rng(), log.clone());
 
 }
 
-// An exact copy of rand::Rng::shuffle, with the signature modified to
-// accept any type that implements LenAndSwap
-fn shuffle<T, R>(values: &mut T, mut rng: R)
+/// Fisher-Yates shuffle
+fn shuffle<T, R>(connections: &mut T, mut rng: R, log: Logger)
     where T: ShuffleCollection,
           R: rand::Rng {
-    let mut i = values.len();
-    while i >= 2 {
-        // invariant: elements with index >= i have been locked in place.
+    let mut i = connections.len();
+    while i > 1 {
         i -= 1;
-        // lock element i in place.
-        values.swap(i, rng.gen_range(0, i + 1));
+        let new_idx = rng.gen_range(0, i);
+        debug!(log, "randomization puts item at idx {} to idx {}", i, new_idx);
+        connections.swap(i, new_idx);
     }
 }

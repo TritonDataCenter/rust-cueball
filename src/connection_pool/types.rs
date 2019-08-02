@@ -61,6 +61,7 @@ pub struct ConnectionPoolOptions {
     /// period. The default is 100 milliseconds.
     pub rebalancer_action_delay: Option<u64>,
     pub decoherence_interval: Option<u64>,
+    pub decoherence_delay: Option<u64>,
 }
 
 // This type wraps a pair that associates a `BackendKey` with a connection of
@@ -291,6 +292,7 @@ impl fmt::Display for ConnectionPoolState {
     }
 }
 
+/// Utility methods for shuffling a collection
 pub trait ShuffleCollection {
     fn len(&self) -> usize;
     fn swap(&mut self, i: usize, j: usize);

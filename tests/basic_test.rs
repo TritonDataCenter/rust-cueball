@@ -1,7 +1,7 @@
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Barrier, Mutex};
-use std::thread;
+use std::{thread, time};
 
 use slog::{o, Drain, Logger};
 
@@ -114,8 +114,9 @@ fn connection_pool_claim() {
         maximum: 3,
         claim_timeout: Some(1000),
         log: log.clone(),
-        decoherence_interval: Some(60),
         rebalancer_action_delay: None,
+        decoherence_interval: Some(1),
+        decoherence_delay: None,
     };
 
     let max_connections = pool_opts.maximum.clone();
@@ -209,8 +210,9 @@ fn connection_pool_stop() {
         maximum: 3,
         claim_timeout: Some(1000),
         log: log.clone(),
-        decoherence_interval: Some(60),
         rebalancer_action_delay: None,
+        decoherence_interval: Some(60),
+        decoherence_delay: None,
     };
 
     let max_connections = pool_opts.maximum.clone();
@@ -257,8 +259,9 @@ fn connection_pool_accounting() {
         maximum: 3,
         claim_timeout: Some(1000),
         log: log.clone(),
-        decoherence_interval: Some(60),
         rebalancer_action_delay: None,
+        decoherence_interval: Some(60),
+        decoherence_delay: Some(1000),
     };
 
     let max_connections: ConnectionCount = pool_opts.maximum.clone().into();
@@ -350,4 +353,61 @@ fn connection_pool_accounting() {
     let m_stats_check7 = pool.get_stats();
     assert!(m_stats_check7.is_none());
     assert_eq!(pool.get_state(), String::from("stopped"));
+}
+
+#[test]
+fn connection_pool_decoherence() {
+    let plain = slog_term::PlainSyncDecorator::new(std::io::stdout());
+    let log = Logger::root(
+        Mutex::new(slog_term::FullFormat::new(plain).build()).fuse(),
+        o!("build-id" => "0.1.0"),
+    );
+
+    let be1 = (IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 55555);
+    let be2 = (IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 55556);
+    let be3 = (IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 55557);
+    let be4 = (IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 55558);
+    let be5 = (IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 55559);
+    let be6 = (IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 55560);
+    let be7 = (IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 55561);
+    let be8 = (IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 55562);
+
+    let resolver = FakeResolver::new(
+        vec![be1, be2, be3, be4, be5, be6, be7, be8]
+    );
+
+    let pool_opts = ConnectionPoolOptions {
+        maximum: 8,
+        claim_timeout: Some(1000),
+        log: log.clone(),
+        rebalancer_action_delay: Some(10000),
+        decoherence_interval: Some(2),
+        decoherence_delay: Some(1000),
+    };
+
+    let max_connections: ConnectionCount = pool_opts.maximum.clone().into();
+
+    let pool = ConnectionPool::new(
+        pool_opts,
+        resolver,
+        DummyConnection::new,
+    );
+
+    // Wait for total_connections to reach the maximum
+    let mut all_conns_established = false;
+    while !all_conns_established {
+        if let Some(stats) = pool.get_stats() {
+            if stats.total_connections == max_connections {
+                all_conns_established = true;
+            }
+        }
+    }
+
+    // sleep so that decoherence can run
+    let sleep_time = time::Duration::from_millis(2000);
+    thread::sleep(sleep_time);
+
+    if let Some(stats) = pool.get_stats() {
+        assert!(stats.total_connections == max_connections);
+    }
 }

@@ -12,9 +12,6 @@ derive_more = "0.14.0"
 rand = "0.7.0"
 sha1 = "0.6.0"
 slog = "2.4.1"
-priority-queue = "0.6.0"
-timer = "0.2.0"
-tokio = "0.1.22"
 
 [dev-dependencies]
 slog-term = "2.4.0"

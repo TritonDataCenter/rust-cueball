@@ -13,8 +13,7 @@ use std::sync::atomic::Ordering as AtomicOrdering;
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Barrier};
 use std::{thread, time};
-use std::time::{Duration, Instant};
-
+use std::time::Duration;
 
 use slog::{debug, error, info, warn, Logger};
 
@@ -28,9 +27,6 @@ use crate::error::Error;
 use crate::resolver::{
     BackendAction, BackendAddedMsg, BackendMsg, BackendRemovedMsg, Resolver
 };
-use tokio::prelude::*;
-use tokio::timer::Interval;
-
 
 const DEFAULT_REBALANCE_ACTION_DELAY: u64 = 100;
 const DEFAULT_DECOHERENCE_INTERVAL: u64 = 60;
@@ -184,7 +180,7 @@ where
             rebalance_thread: Some(rebalance_thread),
             rebalancer_stop,
             decoherence_interval: Some(decoherence_interval),
-            decoherence_delay: Some(decoherence_interval),
+            decoherence_delay: Some(decoherence_delay),
             log: cpo.log,
             state: ConnectionPoolState::Running,
             _resolver: PhantomData,
@@ -919,30 +915,26 @@ fn rebalancer_loop<C, F>(
 }
 
 /// Start a thread to run periodic decoherence on the connection pool
-fn start_decoherence<C>(
+fn start_decoherence<C> (
     decoherence_interval: u64,
     decoherence_delay: u64,
     protected_data: ProtectedData<C>,
     log: Logger,
-) where
+)
+where
     C: Connection
 {
     debug!(log, "starting decoherence task, interval {} seconds", decoherence_interval);
 
-    // brief sleep before starting up to give the connection pool time to settle.
     let sleep_time = time::Duration::from_millis(decoherence_delay);
     thread::sleep(sleep_time);
 
-    let task = Interval::new(Instant::now(), Duration::from_secs(decoherence_interval))
-    .for_each(move |_| {
-        debug!(log, "running decoherence");
-        reshuffle_connection_queue(protected_data.clone(), log.clone());
-        debug!(log, "done running decoherence");
-        Ok(())
-    })
-    .map_err(|e| panic!("interval errored; err={:?}", e));
-
-    thread::spawn(move || { tokio::run(task); });
+    let mut planner = periodic::Planner::new();
+    planner.add(
+        move || reshuffle_connection_queue(protected_data.clone(), log.clone()),
+        periodic::Every::new(Duration::from_secs(decoherence_interval)),
+    );
+    planner.start();
 }
 
 fn reshuffle_connection_queue<C>(

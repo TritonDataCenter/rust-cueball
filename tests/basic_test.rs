@@ -382,7 +382,7 @@ fn connection_pool_decoherence() {
         log: log.clone(),
         rebalancer_action_delay: Some(10000),
         decoherence_interval: Some(2),
-        decoherence_delay: Some(1000),
+        decoherence_delay: Some(5000),
     };
 
     let max_connections: ConnectionCount = pool_opts.maximum.clone().into();
@@ -404,7 +404,7 @@ fn connection_pool_decoherence() {
     }
 
     // sleep so that decoherence can run
-    let sleep_time = time::Duration::from_millis(2000);
+    let sleep_time = time::Duration::from_millis(5000);
     thread::sleep(sleep_time);
 
     if let Some(stats) = pool.get_stats() {

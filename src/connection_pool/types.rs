@@ -14,8 +14,6 @@ use slog::Logger;
 use crate::backend::{Backend, BackendKey};
 use crate::connection::Connection;
 
-extern crate rand;
-
 
 /// The connection counts for the connection pool
 #[derive(Copy, Clone, Debug)]

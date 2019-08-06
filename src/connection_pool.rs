@@ -28,9 +28,12 @@ use crate::resolver::{
     BackendAction, BackendAddedMsg, BackendMsg, BackendRemovedMsg, Resolver
 };
 
+// Rebalance delay in milliseconds
 const DEFAULT_REBALANCE_ACTION_DELAY: u64 = 100;
-const DEFAULT_DECOHERENCE_INTERVAL: u64 = 60;
+// Decohere delay in milliseconds
 const DEFAULT_DECOHERENCE_DELAY: u64 = 100;
+// Decoherence interval in seconds
+const DEFAULT_DECOHERENCE_INTERVAL: u64 = 60;
 
 /// A pool of connections to a multi-node service
 #[derive(Debug)]
@@ -86,7 +89,7 @@ impl<C, R, F> ConnectionPool<C, R, F>
 where
     C: Connection,
     R: Resolver,
-    F: FnMut(&Backend) -> C + Send +Sync + 'static
+F: FnMut(&Backend) -> C + Send + 'static
 {
     pub fn new(
         cpo: ConnectionPoolOptions,
@@ -521,7 +524,7 @@ pub struct PoolConnection<C, R, F>
 where
     C: Connection,
     R: Resolver,
-    F: FnMut(&Backend) -> C + Send + Sync + 'static
+    F: FnMut(&Backend) -> C + Send +  'static
 {
     connection_pool: ConnectionPool<C, R, F>,
     connection_pair: ConnectionKeyPair<C>
@@ -531,7 +534,7 @@ impl<C, R, F> Drop for PoolConnection<C, R, F>
 where
     C: Connection,
     R: Resolver,
-    F: FnMut(&Backend) -> C + Send + Sync
+    F: FnMut(&Backend) -> C + Send
 {
     fn drop(&mut self) {
         let ConnectionKeyPair((key, m_conn)) = &mut self.connection_pair;

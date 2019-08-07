@@ -1,12 +1,15 @@
 [package]
 name = "cueball"
 version = "0.1.0"
-authors = ["Kelly McLaughlin <kelly.mclaughlin@joyent.com>"]
+authors = ["Kelly McLaughlin <kelly.mclaughlin@joyent.com>", "Jon Anderson <jon.anderson@joyent.com>"]
 edition = "2018"
 
 [dependencies]
 base64 = "0.10.1"
+chrono = "0.4.7"
+periodic = "0.1.1"
 derive_more = "0.14.0"
+rand = "0.7.0"
 sha1 = "0.6.0"
 slog = "2.4.1"
 

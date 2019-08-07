@@ -5,7 +5,7 @@
 pub mod types;
 
 use std::cmp::Ordering;
-use std::collections::HashMap;
+use std::collections::{HashMap};
 use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut};
 use std::sync::atomic::AtomicBool;
@@ -13,6 +13,7 @@ use std::sync::atomic::Ordering as AtomicOrdering;
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Barrier};
 use std::{thread, time};
+use std::time::Duration;
 
 use slog::{debug, error, info, warn, Logger};
 
@@ -20,17 +21,19 @@ use crate::backend::{Backend, BackendKey};
 use crate::connection::Connection;
 use crate::connection_pool::types::{
     ConnectionCount, ConnectionData, ConnectionKeyPair, ConnectionPoolOptions,
-    ConnectionPoolState, ConnectionPoolStats, ProtectedData, RebalanceCheck
+    ConnectionPoolState, ConnectionPoolStats, ProtectedData, RebalanceCheck, ShuffleCollection,
 };
 use crate::error::Error;
 use crate::resolver::{
     BackendAction, BackendAddedMsg, BackendMsg, BackendRemovedMsg, Resolver
 };
 
-// General TODOs
-// * Decoherence
-
+// Rebalance delay in milliseconds
 const DEFAULT_REBALANCE_ACTION_DELAY: u64 = 100;
+// Decohere delay in milliseconds
+const DEFAULT_DECOHERENCE_DELAY: u64 = 100;
+// Decoherence interval in seconds
+const DEFAULT_DECOHERENCE_INTERVAL: u64 = 300;
 
 /// A pool of connections to a multi-node service
 #[derive(Debug)]
@@ -46,6 +49,8 @@ pub struct ConnectionPool<C, R, F>
     rebalance_check: RebalanceCheck,
     rebalance_thread: Option<thread::JoinHandle<()>>,
     rebalancer_stop: Arc<AtomicBool>,
+    decoherence_interval: Option<u64>,
+    decoherence_delay: Option<u64>,
     log: Logger,
     state: ConnectionPoolState,
     _resolver: PhantomData<R>,
@@ -70,6 +75,8 @@ where
             rebalance_check: self.rebalance_check.clone(),
             rebalance_thread: None,
             rebalancer_stop: self.rebalancer_stop.clone(),
+            decoherence_interval: self.decoherence_interval,
+            decoherence_delay: self.decoherence_delay,
             log: self.log.clone(),
             state: self.state,
             _resolver: PhantomData,
@@ -82,7 +89,7 @@ impl<C, R, F> ConnectionPool<C, R, F>
 where
     C: Connection,
     R: Resolver,
-    F: FnMut(&Backend) -> C + Send + 'static
+F: FnMut(&Backend) -> C + Send + 'static
 {
     pub fn new(
         cpo: ConnectionPoolOptions,
@@ -140,7 +147,7 @@ where
         let rebalancer_action_delay = cpo
             .rebalancer_action_delay
             .unwrap_or(DEFAULT_REBALANCE_ACTION_DELAY);
-        let rebalance_thread = thread::spawn(move || {
+       let rebalance_thread = thread::spawn(move || {
             rebalancer_loop(
                 max_connections,
                 rebalancer_action_delay,
@@ -151,6 +158,18 @@ where
                 create_connection,
             )
         });
+        let decoherence_interval = cpo
+            .decoherence_interval
+            .unwrap_or(DEFAULT_DECOHERENCE_INTERVAL);
+        let decoherence_delay = cpo
+            .decoherence_delay
+            .unwrap_or(DEFAULT_DECOHERENCE_DELAY);
+        start_decoherence(
+            decoherence_interval,
+            decoherence_delay,
+            protected_data.clone(),
+            cpo.log.clone(),
+        );
 
         let pool = ConnectionPool {
             protected_data,
@@ -163,11 +182,14 @@ where
             rebalance_check: rebalancer_check,
             rebalance_thread: Some(rebalance_thread),
             rebalancer_stop,
+            decoherence_interval: Some(decoherence_interval),
+            decoherence_delay: Some(decoherence_delay),
             log: cpo.log,
             state: ConnectionPoolState::Running,
             _resolver: PhantomData,
             _connection_function: PhantomData
         };
+
 
         barrier.clone().wait();
         pool
@@ -487,15 +509,16 @@ where
         connection_data.stats.idle_connections += 1.into();
         self.protected_data.condvar_notify();
     }
+
 }
 
 /// A connection abstraction reprsenting a member of the pool
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct PoolConnection<C, R, F>
 where
     C: Connection,
     R: Resolver,
-    F: FnMut(&Backend) -> C + Send + 'static
+    F: FnMut(&Backend) -> C + Send +  'static
 {
     connection_pool: ConnectionPool<C, R, F>,
     connection_pair: ConnectionKeyPair<C>
@@ -533,7 +556,7 @@ impl<C, R, F> Deref for PoolConnection<C, R, F>
 where
     C: Connection,
     R: Resolver,
-    F: FnMut(&Backend) -> C + Send
+    F: FnMut(&Backend) -> C + Send + Sync
 {
     type Target = C;
 
@@ -546,7 +569,7 @@ impl<C, R, F> DerefMut for PoolConnection<C, R, F>
 where
     C: Connection,
     R: Resolver,
-    F: FnMut(&Backend) -> C + Send
+    F: FnMut(&Backend) -> C + Send + Sync
 {
     fn deref_mut(&mut self) -> &mut C {
         (self.connection_pair.0).1.as_mut().unwrap()
@@ -885,5 +908,54 @@ fn rebalancer_loop<C, F>(
         }
 
         done = stop.load(AtomicOrdering::Relaxed);
+    }
+}
+
+/// Start a thread to run periodic decoherence on the connection pool
+fn start_decoherence<C> (
+    decoherence_interval: u64,
+    decoherence_delay: u64,
+    protected_data: ProtectedData<C>,
+    log: Logger,
+)
+where
+    C: Connection
+{
+    debug!(log, "starting decoherence task, interval {} seconds", decoherence_interval);
+
+    let sleep_time = time::Duration::from_millis(decoherence_delay);
+    thread::sleep(sleep_time);
+
+    let mut planner = periodic::Planner::new();
+    planner.add(
+        move || reshuffle_connection_queue(protected_data.clone(), log.clone()),
+        periodic::Every::new(Duration::from_secs(decoherence_interval)),
+    );
+    planner.start();
+}
+
+fn reshuffle_connection_queue<C>(
+    protected_data: ProtectedData<C>,
+    log: Logger,
+) where
+    C: Connection
+{
+    debug!(log, "Performing connection decoherence shuffle...");
+
+    let mut connection_data = protected_data.connection_data_lock();
+    shuffle(&mut connection_data.connections, rand::thread_rng(), log.clone());
+
+}
+
+/// Fisher-Yates shuffle
+fn shuffle<T, R>(connections: &mut T, mut rng: R, log: Logger)
+    where T: ShuffleCollection,
+          R: rand::Rng {
+    let mut i = connections.len();
+    while i > 1 {
+        i -= 1;
+        let new_idx = rng.gen_range(0, i);
+        debug!(log, "randomization puts item at idx {} to idx {}", i, new_idx);
+        connections.swap(i, new_idx);
     }
 }

@@ -115,6 +115,8 @@ fn main() {
         claim_timeout: Some(1000),
         log: log.clone(),
         rebalancer_action_delay: None,
+        decoherence_interval: None,
+        decoherence_delay: None,
     };
 
     let pool = ConnectionPool::new(

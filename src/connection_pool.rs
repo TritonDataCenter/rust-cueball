@@ -33,7 +33,7 @@ const DEFAULT_REBALANCE_ACTION_DELAY: u64 = 100;
 // Decohere delay in milliseconds
 const DEFAULT_DECOHERENCE_DELAY: u64 = 100;
 // Decoherence interval in seconds
-const DEFAULT_DECOHERENCE_INTERVAL: u64 = 60;
+const DEFAULT_DECOHERENCE_INTERVAL: u64 = 300;
 
 /// A pool of connections to a multi-node service
 #[derive(Debug)]

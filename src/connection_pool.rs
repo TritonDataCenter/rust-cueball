@@ -556,7 +556,7 @@ impl<C, R, F> Deref for PoolConnection<C, R, F>
 where
     C: Connection,
     R: Resolver,
-    F: FnMut(&Backend) -> C + Send + Sync
+    F: FnMut(&Backend) -> C + Send
 {
     type Target = C;
 
@@ -569,7 +569,7 @@ impl<C, R, F> DerefMut for PoolConnection<C, R, F>
 where
     C: Connection,
     R: Resolver,
-    F: FnMut(&Backend) -> C + Send + Sync
+    F: FnMut(&Backend) -> C + Send
 {
     fn deref_mut(&mut self) -> &mut C {
         (self.connection_pair.0).1.as_mut().unwrap()

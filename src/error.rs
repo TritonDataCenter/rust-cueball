@@ -1,7 +1,4 @@
-
-/*
- * Copyright 2019 Joyent, Inc.
- */
+// Copyright 2019 Joyent, Inc.
 
 use std::error::Error as StdError;
 use std::fmt;
@@ -12,8 +9,9 @@ const BACKEND_NO_CONNECTION_STR: &str = "Found a backend key with no \
                                          associated connection";
 const CONNECTION_RETRIEVAL_FAILURE_STR: &str = "Unable to retrieve a \
                                                 connection";
-const STOP_CALLED_BY_CLONE_STR: &str = "ConnectionPool clones may not stop the \
-                                        connection pool.";
+const STOP_CALLED_BY_CLONE_STR: &str =
+    "ConnectionPool clones may not stop the \
+     connection pool.";
 const DUMMY_ERROR_STR: &str = "dummy error";
 
 #[derive(Debug)]
@@ -38,21 +36,21 @@ pub enum Error {
     ConnectionRetrievalFailure,
     // For internal pool use only
     #[doc(hidden)]
-    DummyError
+    DummyError,
 }
 
 impl fmt::Display for Error {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Error::ClaimFailure =>
-                CLAIM_FAILURE_STR.fmt(fmt),
-            Error::BackendWithNoConnection =>
-                BACKEND_NO_CONNECTION_STR.fmt(fmt),
-            Error::ConnectionRetrievalFailure =>
-                CONNECTION_RETRIEVAL_FAILURE_STR.fmt(fmt),
-            Error::StopCalledByClone =>
-                STOP_CALLED_BY_CLONE_STR.fmt(fmt),
-            Error::DummyError => DUMMY_ERROR_STR.fmt(fmt)
+            Error::ClaimFailure => CLAIM_FAILURE_STR.fmt(fmt),
+            Error::BackendWithNoConnection => {
+                BACKEND_NO_CONNECTION_STR.fmt(fmt)
+            }
+            Error::ConnectionRetrievalFailure => {
+                CONNECTION_RETRIEVAL_FAILURE_STR.fmt(fmt)
+            }
+            Error::StopCalledByClone => STOP_CALLED_BY_CLONE_STR.fmt(fmt),
+            Error::DummyError => DUMMY_ERROR_STR.fmt(fmt),
         }
     }
 }
@@ -60,16 +58,13 @@ impl fmt::Display for Error {
 impl StdError for Error {
     fn description(&self) -> &str {
         match self {
-            Error::ClaimFailure =>
-                CLAIM_FAILURE_STR,
-            Error::BackendWithNoConnection =>
-                BACKEND_NO_CONNECTION_STR,
-            Error::ConnectionRetrievalFailure =>
-                CONNECTION_RETRIEVAL_FAILURE_STR,
-            Error::StopCalledByClone =>
-                STOP_CALLED_BY_CLONE_STR,
-            Error::DummyError =>
-                DUMMY_ERROR_STR
+            Error::ClaimFailure => CLAIM_FAILURE_STR,
+            Error::BackendWithNoConnection => BACKEND_NO_CONNECTION_STR,
+            Error::ConnectionRetrievalFailure => {
+                CONNECTION_RETRIEVAL_FAILURE_STR
+            }
+            Error::StopCalledByClone => STOP_CALLED_BY_CLONE_STR,
+            Error::DummyError => DUMMY_ERROR_STR,
         }
     }
 

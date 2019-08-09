@@ -1,33 +1,34 @@
-/*
- * Copyright 2019 Joyent, Inc.
- */
+// Copyright 2019 Joyent, Inc.
 
 pub mod types;
 
 use std::cmp::Ordering;
-use std::collections::{HashMap};
+use std::collections::HashMap;
 use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut};
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering as AtomicOrdering;
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Barrier};
-use std::{thread, time};
 use std::time::Duration;
+use std::{thread, time};
 
-use slog::{debug, error, info, warn, Logger};
+use slog::{debug, error, info, o, warn, Drain, Logger};
 
 use crate::backend::{Backend, BackendKey};
 use crate::connection::Connection;
 use crate::connection_pool::types::{
     ConnectionCount, ConnectionData, ConnectionKeyPair, ConnectionPoolOptions,
-    ConnectionPoolState, ConnectionPoolStats, ProtectedData, RebalanceCheck, ShuffleCollection,
+    ConnectionPoolState, ConnectionPoolStats, ProtectedData, RebalanceCheck,
+    ShuffleCollection,
 };
 use crate::error::Error;
 use crate::resolver::{
-    BackendAction, BackendAddedMsg, BackendMsg, BackendRemovedMsg, Resolver
+    BackendAction, BackendAddedMsg, BackendMsg, BackendRemovedMsg, Resolver,
 };
 
+// Default number of maximum pool connections
+const DEFAULT_MAX_CONNECTIONS: u32 = 10;
 // Rebalance delay in milliseconds
 const DEFAULT_REBALANCE_ACTION_DELAY: u64 = 100;
 // Decoherence interval in seconds
@@ -35,14 +36,12 @@ const DEFAULT_DECOHERENCE_INTERVAL: u64 = 300;
 
 /// A pool of connections to a multi-node service
 #[derive(Debug)]
-pub struct ConnectionPool<C, R, F>
-{
+pub struct ConnectionPool<C, R, F> {
     protected_data: ProtectedData<C>,
-    last_error: Option<Error>,
     resolver_thread: Option<thread::JoinHandle<()>>,
     resolver_rx_thread: Option<thread::JoinHandle<()>>,
     resolver_tx: Option<Sender<BackendMsg>>,
-    maximum: u32,
+    max_connections: u32,
     claim_timeout: Option<u64>,
     rebalance_check: RebalanceCheck,
     rebalance_thread: Option<thread::JoinHandle<()>>,
@@ -51,23 +50,22 @@ pub struct ConnectionPool<C, R, F>
     log: Logger,
     state: ConnectionPoolState,
     _resolver: PhantomData<R>,
-    _connection_function: PhantomData<F>
+    _connection_function: PhantomData<F>,
 }
 
 impl<C, R, F> Clone for ConnectionPool<C, R, F>
 where
     C: Connection,
     R: Resolver,
-    F: FnMut(&Backend) -> C
+    F: FnMut(&Backend) -> C,
 {
     fn clone(&self) -> ConnectionPool<C, R, F> {
         ConnectionPool {
             protected_data: self.protected_data.clone(),
-            last_error: None,
             resolver_thread: None,
             resolver_rx_thread: None,
             resolver_tx: None,
-            maximum: self.maximum,
+            max_connections: self.max_connections,
             claim_timeout: self.claim_timeout,
             rebalance_check: self.rebalance_check.clone(),
             rebalance_thread: None,
@@ -76,7 +74,7 @@ where
             log: self.log.clone(),
             state: self.state,
             _resolver: PhantomData,
-            _connection_function: PhantomData
+            _connection_function: PhantomData,
         }
     }
 }
@@ -85,14 +83,21 @@ impl<C, R, F> ConnectionPool<C, R, F>
 where
     C: Connection,
     R: Resolver,
-F: FnMut(&Backend) -> C + Send + 'static
+    F: FnMut(&Backend) -> C + Send + 'static,
 {
     pub fn new(
         cpo: ConnectionPoolOptions,
         mut resolver: R,
-        create_connection: F
+        create_connection: F,
     ) -> Self {
-        let connection_data = ConnectionData::new(cpo.maximum as usize);
+        let max_connections =
+            cpo.max_connections.unwrap_or(DEFAULT_MAX_CONNECTIONS);
+
+        let connection_data = ConnectionData::new(max_connections as usize);
+
+        let logger = cpo
+            .log
+            .unwrap_or(Logger::root(slog_stdlog::StdLog.fuse(), o!()));
 
         // Create a channel to receive notifications from the resolver. The
         // connection pool make a copy of the resolver_tx side of the channel
@@ -122,7 +127,7 @@ F: FnMut(&Backend) -> C + Send + 'static
         let protected_data_clone = protected_data.clone();
         let rebalancer_clone = rebalancer_check.clone();
 
-        let resolver_log_clone = cpo.log.clone();
+        let resolver_log_clone = logger.clone();
         let resolver_rx_thread = thread::spawn(move || {
             resolver_recv_loop::<C>(
                 resolver_rx,
@@ -137,13 +142,12 @@ F: FnMut(&Backend) -> C + Send + 'static
 
         let protected_data_clone2 = protected_data.clone();
         let rebalancer_clone2 = rebalancer_check.clone();
-        let max_connections = cpo.maximum;
-        let rebalancer_log_clone = cpo.log.clone();
+        let rebalancer_log_clone = logger.clone();
         let rebalancer_stop_clone = rebalancer_stop.clone();
         let rebalancer_action_delay = cpo
             .rebalancer_action_delay
             .unwrap_or(DEFAULT_REBALANCE_ACTION_DELAY);
-       let rebalance_thread = thread::spawn(move || {
+        let rebalance_thread = thread::spawn(move || {
             rebalancer_loop(
                 max_connections,
                 rebalancer_action_delay,
@@ -157,30 +161,29 @@ F: FnMut(&Backend) -> C + Send + 'static
         let decoherence_interval = cpo
             .decoherence_interval
             .unwrap_or(DEFAULT_DECOHERENCE_INTERVAL);
+
         start_decoherence(
             decoherence_interval,
             protected_data.clone(),
-            cpo.log.clone(),
+            logger.clone(),
         );
 
         let pool = ConnectionPool {
             protected_data,
-            last_error: None,
             resolver_thread: Some(resolver_thread),
             resolver_rx_thread: Some(resolver_rx_thread),
             resolver_tx: Some(resolver_tx),
-            maximum: cpo.maximum,
+            max_connections,
             claim_timeout: cpo.claim_timeout,
             rebalance_check: rebalancer_check,
             rebalance_thread: Some(rebalance_thread),
             rebalancer_stop,
             decoherence_interval: Some(decoherence_interval),
-            log: cpo.log,
+            log: logger,
             state: ConnectionPoolState::Running,
             _resolver: PhantomData,
-            _connection_function: PhantomData
+            _connection_function: PhantomData,
         };
-
 
         barrier.clone().wait();
         pool
@@ -214,7 +217,8 @@ F: FnMut(&Backend) -> C + Send + 'static
             let resolver_tx = self.resolver_tx.take().unwrap();
             match resolver_tx.send(BackendMsg::StopMsg) {
                 Ok(()) => {
-                    let resolver_rx_thread = self.resolver_rx_thread.take().unwrap();
+                    let resolver_rx_thread =
+                        self.resolver_rx_thread.take().unwrap();
                     let _ = resolver_rx_thread.join();
                 }
                 Err(e) => {
@@ -234,7 +238,8 @@ F: FnMut(&Backend) -> C + Send + 'static
             debug!(self.log, "stop: Joined connection pool worker threads");
 
             // Mark all connections as unwanted and close what is in the pool
-            let mut connection_data = self.protected_data.connection_data_lock();
+            let mut connection_data =
+                self.protected_data.connection_data_lock();
 
             let backends = connection_data.backends.clone();
 
@@ -257,7 +262,8 @@ F: FnMut(&Backend) -> C + Send + 'static
 
             connection_data.backends.clear();
 
-            let mut connections_remaining = connection_data.stats.total_connections;
+            let mut connections_remaining =
+                connection_data.stats.total_connections;
 
             drop(connection_data);
 
@@ -266,7 +272,10 @@ F: FnMut(&Backend) -> C + Send + 'static
             while connections_remaining > 0.into() {
                 connection_data = self.protected_data.connection_data_lock();
 
-                info!(self.log, "connections remaining: {}", connections_remaining);
+                info!(
+                    self.log,
+                    "connections remaining: {}", connections_remaining
+                );
 
                 while !connection_data.connections.is_empty() {
                     match connection_data.connections.pop_front() {
@@ -284,20 +293,24 @@ F: FnMut(&Backend) -> C + Send + 'static
                             // connections. In the future we might add an option
                             // to wait for all threads if that was an important
                             // use case for users.
-                            let _close_thread =
-                                thread::spawn(|| close_connection(close_log, close_key, conn));
+                            let _close_thread = thread::spawn(|| {
+                                close_connection(close_log, close_key, conn)
+                            });
                             connection_data.stats.idle_connections -= 1.into();
                             connections_remaining -= 1.into();
                         }
                         Some(ConnectionKeyPair((_key, None))) => {
                             // Should never happen
-                            let err_msg = String::from("Found backend key with no connection");
+                            let err_msg = String::from(
+                                "Found backend key with no connection",
+                            );
                             warn!(self.log, "{}", err_msg);
                         }
                         None => {
                             // This also should never happen here because we checked
                             // if the queue was empty before entering the loop
-                            let err_msg = String::from("Unable to retrieve a connection");
+                            let err_msg =
+                                String::from("Unable to retrieve a connection");
                             warn!(self.log, "{}", err_msg);
                         }
                     }
@@ -318,13 +331,16 @@ F: FnMut(&Backend) -> C + Send + 'static
     }
 
     pub fn claim(&self) -> Result<PoolConnection<C, R, F>, Error> {
-        let mut connection_data_guard = self.protected_data.connection_data_lock();
+        let mut connection_data_guard =
+            self.protected_data.connection_data_lock();
         let mut connection_data = connection_data_guard.deref_mut();
         let mut waiting_for_connection = true;
         let mut result = Err(Error::DummyError);
 
-        let mut unwanted_connection_counts: HashMap<BackendKey, ConnectionCount> =
-            connection_data.unwanted_connection_counts.drain().collect();
+        let mut unwanted_connection_counts: HashMap<
+            BackendKey,
+            ConnectionCount,
+        > = connection_data.unwanted_connection_counts.drain().collect();
 
         while waiting_for_connection {
             if connection_data.stats.idle_connections > 0.into() {
@@ -339,14 +355,17 @@ F: FnMut(&Backend) -> C + Send + 'static
                             // its own thread to be safe.
                             let close_log = self.log.clone();
                             let close_key = key.clone();
-                            let _close_thread =
-                                thread::spawn(|| close_connection(close_log, close_key, conn));
+                            let _close_thread = thread::spawn(|| {
+                                close_connection(close_log, close_key, conn)
+                            });
 
                             connection_data.stats.idle_connections -= 1.into();
                             unwanted_connection_counts
                                 .entry(key.clone())
                                 .and_modify(|e| *e -= 1u32.into());
-                            if let Some(updated_count) = unwanted_connection_counts.get(&key) {
+                            if let Some(updated_count) =
+                                unwanted_connection_counts.get(&key)
+                            {
                                 info!(
                                     self.log,
                                     "Updated unwanted count for backend {}: {}",
@@ -358,12 +377,18 @@ F: FnMut(&Backend) -> C + Send + 'static
                                 }
                             }
                         } else {
-                            info!(self.log, "Found idle connection for backend {}", &key);
+                            info!(
+                                self.log,
+                                "Found idle connection for backend {}", &key
+                            );
                             connection_data.stats.idle_connections -= 1.into();
                             waiting_for_connection = false;
                             result = Ok(PoolConnection {
                                 connection_pool: self.clone(),
-                                connection_pair: ConnectionKeyPair((key, Some(conn)))
+                                connection_pair: ConnectionKeyPair((
+                                    key,
+                                    Some(conn),
+                                )),
                             });
                         }
                     }
@@ -399,13 +424,16 @@ F: FnMut(&Backend) -> C + Send + 'static
     }
 
     pub fn try_claim(&self) -> Option<PoolConnection<C, R, F>> {
-        let mut connection_data_guard = self.protected_data.connection_data_lock();
+        let mut connection_data_guard =
+            self.protected_data.connection_data_lock();
         let mut connection_data = connection_data_guard.deref_mut();
         let mut waiting_for_connection = true;
         let mut result: Option<PoolConnection<C, R, F>> = None;
 
-        let mut unwanted_connection_counts: HashMap<BackendKey, ConnectionCount> =
-            connection_data.unwanted_connection_counts.drain().collect();
+        let mut unwanted_connection_counts: HashMap<
+            BackendKey,
+            ConnectionCount,
+        > = connection_data.unwanted_connection_counts.drain().collect();
 
         while waiting_for_connection {
             if connection_data.stats.idle_connections > 0.into() {
@@ -420,15 +448,18 @@ F: FnMut(&Backend) -> C + Send + 'static
                             // its own thread to be safe.
                             let close_log = self.log.clone();
                             let close_key = key.clone();
-                            let _close_thread =
-                                thread::spawn(|| close_connection(close_log, close_key, conn));
+                            let _close_thread = thread::spawn(|| {
+                                close_connection(close_log, close_key, conn)
+                            });
 
                             connection_data.stats.idle_connections -= 1.into();
 
                             unwanted_connection_counts
                                 .entry(key.clone())
                                 .and_modify(|e| *e -= 1u32.into());
-                            if let Some(updated_count) = unwanted_connection_counts.get(&key) {
+                            if let Some(updated_count) =
+                                unwanted_connection_counts.get(&key)
+                            {
                                 info!(
                                     self.log,
                                     "Updated unwanted count for backend {}: {}",
@@ -440,24 +471,33 @@ F: FnMut(&Backend) -> C + Send + 'static
                                 }
                             }
                         } else {
-                            info!(self.log, "Found idle connection for backend {}", &key);
+                            info!(
+                                self.log,
+                                "Found idle connection for backend {}", &key
+                            );
 
                             connection_data.stats.idle_connections -= 1.into();
                             waiting_for_connection = false;
                             result = Some(PoolConnection {
                                 connection_pool: self.clone(),
-                                connection_pair: ConnectionKeyPair((key, Some(conn)))
+                                connection_pair: ConnectionKeyPair((
+                                    key,
+                                    Some(conn),
+                                )),
                             });
                         }
                     }
                     Some(ConnectionKeyPair((_key, None))) => {
                         // Should never happen
-                        let err_msg = String::from("Found backend key with no connection");
+                        let err_msg = String::from(
+                            "Found backend key with no connection",
+                        );
                         warn!(self.log, "{}", err_msg);
                         result = None;
                     }
                     None => {
-                        let _err_msg = String::from("Unable to retrieve a connection");
+                        let _err_msg =
+                            String::from("Unable to retrieve a connection");
                         result = None;
                     }
                 }
@@ -472,14 +512,11 @@ F: FnMut(&Backend) -> C + Send + 'static
         result
     }
 
-    pub fn get_last_error(&self) -> Option<String> {
-        None
-    }
-
     pub fn get_stats(&self) -> Option<ConnectionPoolStats> {
         match self.state {
             ConnectionPoolState::Running => {
-                let connection_data = self.protected_data.connection_data_lock();
+                let connection_data =
+                    self.protected_data.connection_data_lock();
                 Some(connection_data.stats)
             }
             _ => None,
@@ -500,7 +537,6 @@ F: FnMut(&Backend) -> C + Send + 'static
         connection_data.stats.idle_connections += 1.into();
         self.protected_data.condvar_notify();
     }
-
 }
 
 /// A connection abstraction reprsenting a member of the pool
@@ -509,17 +545,17 @@ pub struct PoolConnection<C, R, F>
 where
     C: Connection,
     R: Resolver,
-    F: FnMut(&Backend) -> C + Send +  'static
+    F: FnMut(&Backend) -> C + Send + 'static,
 {
     connection_pool: ConnectionPool<C, R, F>,
-    connection_pair: ConnectionKeyPair<C>
+    connection_pair: ConnectionKeyPair<C>,
 }
 
 impl<C, R, F> Drop for PoolConnection<C, R, F>
 where
     C: Connection,
     R: Resolver,
-    F: FnMut(&Backend) -> C + Send
+    F: FnMut(&Backend) -> C + Send,
 {
     fn drop(&mut self) {
         let ConnectionKeyPair((key, m_conn)) = &mut self.connection_pair;
@@ -547,7 +583,7 @@ impl<C, R, F> Deref for PoolConnection<C, R, F>
 where
     C: Connection,
     R: Resolver,
-    F: FnMut(&Backend) -> C + Send
+    F: FnMut(&Backend) -> C + Send,
 {
     type Target = C;
 
@@ -560,7 +596,7 @@ impl<C, R, F> DerefMut for PoolConnection<C, R, F>
 where
     C: Connection,
     R: Resolver,
-    F: FnMut(&Backend) -> C + Send
+    F: FnMut(&Backend) -> C + Send,
 {
     fn deref_mut(&mut self) -> &mut C {
         (self.connection_pair.0).1.as_mut().unwrap()
@@ -584,7 +620,10 @@ where
     }
 }
 
-fn add_backend<C>(msg: BackendAddedMsg, protected_data: ProtectedData<C>) -> Option<BackendAction>
+fn add_backend<C>(
+    msg: BackendAddedMsg,
+    protected_data: ProtectedData<C>,
+) -> Option<BackendAction>
 where
     C: Connection,
 {
@@ -665,7 +704,8 @@ where
     let backend_count = connection_data.backends.len();
     info!(log, "Backend count: {}", &backend_count);
     let connections_per_backend = max_connections as usize / backend_count;
-    let mut connections_per_backend_rem = max_connections as usize % backend_count;
+    let mut connections_per_backend_rem =
+        max_connections as usize % backend_count;
 
     // Traverse the available backends and assign each backend the value of
     // connections_per_backend in the distribution + 1 extra if
@@ -704,7 +744,8 @@ where
 
         match new_connection_count.cmp(&old_connection_count) {
             Ordering::Greater => {
-                let connection_delta = new_connection_count - old_connection_count;
+                let connection_delta =
+                    new_connection_count - old_connection_count;
                 pending_connections += connection_delta;
                 added_connection_counts.insert(b.clone(), connection_delta);
                 connection_distribution
@@ -713,7 +754,8 @@ where
                     .or_insert(connection_delta);
             }
             Ordering::Less => {
-                let connection_delta = old_connection_count - new_connection_count;
+                let connection_delta =
+                    old_connection_count - new_connection_count;
                 unwanted_connection_counts
                     .entry(b.clone())
                     .and_modify(|e| *e = connection_delta)
@@ -739,10 +781,10 @@ fn add_connections<C, F>(
     max_connections: u32,
     log: &Logger,
     protected_data: ProtectedData<C>,
-    create_connection: &mut F
+    create_connection: &mut F,
 ) where
     C: Connection,
-    F: FnMut(&Backend) -> C
+    F: FnMut(&Backend) -> C,
 {
     connection_counts.iter().for_each(|(b_key, b_count)| {
         for _ in 0..b_count.clone().into() {
@@ -764,8 +806,8 @@ fn add_connections<C, F>(
                 "Unwanted connection count: {}", unwanted_connections_total
             );
 
-            let net_total_connections =
-                connection_data.stats.total_connections - unwanted_connections_total;
+            let net_total_connections = connection_data.stats.total_connections
+                - unwanted_connections_total;
 
             debug!(log, "Net total connections: {}", net_total_connections);
 
@@ -777,13 +819,20 @@ fn add_connections<C, F>(
                     conn.connect()
                         .and_then(|_| {
                             // Update connection info and stats
-                            let connection_key_pair = (b_key.clone(), Some(conn)).into();
-                            connection_data.connections.push_back(connection_key_pair);
+                            let connection_key_pair =
+                                (b_key.clone(), Some(conn)).into();
+                            connection_data
+                                .connections
+                                .push_back(connection_key_pair);
                             connection_data.stats.total_connections += 1.into();
                             connection_data.stats.idle_connections += 1.into();
-                            connection_data.stats.pending_connections -= 1.into();
+                            connection_data.stats.pending_connections -=
+                                1.into();
 
-                            info!(log, "Added connection for backend {}", b_key);
+                            info!(
+                                log,
+                                "Added connection for backend {}", b_key
+                            );
                             protected_data.condvar_notify();
                             Ok(())
                         })
@@ -804,7 +853,8 @@ fn add_connections<C, F>(
                     );
                 }
             } else {
-                let msg = String::from("Maximum connection count already reached");
+                let msg =
+                    String::from("Maximum connection count already reached");
                 debug!(log, "{}", msg);
             }
         }
@@ -863,7 +913,7 @@ fn rebalancer_loop<C, F>(
     mut create_connection: F,
 ) where
     C: Connection,
-    F: FnMut(&Backend) -> C
+    F: FnMut(&Backend) -> C,
 {
     let mut done = stop.load(AtomicOrdering::Relaxed);
 
@@ -875,13 +925,17 @@ fn rebalancer_loop<C, F>(
         if *rebalance {
             // Briefly sleep in case the resolver notifies the pool of multiple
             // changes within a short period
-            let sleep_time = time::Duration::from_millis(rebalance_action_delay);
+            let sleep_time =
+                time::Duration::from_millis(rebalance_action_delay);
             thread::sleep(sleep_time);
 
             debug!(log, "Performing connection rebalance");
 
-            let rebalance_result =
-                rebalance_connections(max_connections, &log, protected_data.clone());
+            let rebalance_result = rebalance_connections(
+                max_connections,
+                &log,
+                protected_data.clone(),
+            );
 
             debug!(log, "Connection rebalance completed");
 
@@ -903,15 +957,17 @@ fn rebalancer_loop<C, F>(
 }
 
 /// Start a thread to run periodic decoherence on the connection pool
-fn start_decoherence<C> (
+fn start_decoherence<C>(
     decoherence_interval: u64,
     protected_data: ProtectedData<C>,
     log: Logger,
-)
-where
-    C: Connection
+) where
+    C: Connection,
 {
-    debug!(log, "starting decoherence task, interval {} seconds", decoherence_interval);
+    debug!(
+        log,
+        "starting decoherence task, interval {} seconds", decoherence_interval
+    );
 
     let mut planner = periodic::Planner::new();
     planner.add(
@@ -921,28 +977,34 @@ where
     planner.start();
 }
 
-fn reshuffle_connection_queue<C>(
-    protected_data: ProtectedData<C>,
-    log: Logger,
-) where
-    C: Connection
+fn reshuffle_connection_queue<C>(protected_data: ProtectedData<C>, log: Logger)
+where
+    C: Connection,
 {
     debug!(log, "Performing connection decoherence shuffle...");
 
     let mut connection_data = protected_data.connection_data_lock();
-    shuffle(&mut connection_data.connections, rand::thread_rng(), log.clone());
-
+    shuffle(
+        &mut connection_data.connections,
+        rand::thread_rng(),
+        log.clone(),
+    );
 }
 
 /// Fisher-Yates shuffle
 fn shuffle<T, R>(connections: &mut T, mut rng: R, log: Logger)
-    where T: ShuffleCollection,
-          R: rand::Rng {
+where
+    T: ShuffleCollection,
+    R: rand::Rng,
+{
     let mut i = connections.len();
     while i > 1 {
         i -= 1;
         let new_idx = rng.gen_range(0, i);
-        debug!(log, "randomization puts item at idx {} to idx {}", i, new_idx);
+        debug!(
+            log,
+            "randomization puts item at idx {} to idx {}", i, new_idx
+        );
         connections.swap(i, new_idx);
     }
 }

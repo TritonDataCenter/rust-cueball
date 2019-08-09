@@ -11,7 +11,8 @@ periodic = "0.1.1"
 derive_more = "0.14.0"
 rand = "0.7.0"
 sha1 = "0.6.0"
-slog = "2.4.1"
+slog = "2"
+slog-stdlog = "3"
 
 [dev-dependencies]
 slog-term = "2.4.0"

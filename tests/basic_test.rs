@@ -1,9 +1,9 @@
+// Copyright 2019 Joyent, Inc.
+
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::mpsc::Sender;
-use std::sync::{Arc, Barrier, Mutex};
+use std::sync::{Arc, Barrier};
 use std::{thread, time};
-
-use slog::{o, Drain, Logger};
 
 use cueball::backend;
 use cueball::backend::{Backend, BackendAddress, BackendPort};
@@ -47,7 +47,6 @@ impl Connection for DummyConnection {
 pub struct FakeResolver {
     backends: Vec<(BackendAddress, BackendPort)>,
     pool_tx: Option<Sender<BackendMsg>>,
-    error: Option<Error>,
     started: bool,
 }
 
@@ -56,7 +55,6 @@ impl FakeResolver {
         FakeResolver {
             backends: backends,
             pool_tx: None,
-            error: None,
             started: false,
         }
     }
@@ -83,25 +81,10 @@ impl Resolver for FakeResolver {
         self.started = false;
         ()
     }
-
-    fn get_last_error(&self) -> Option<String> {
-        if let Some(err) = &self.error {
-            let err_str = format!("{}", err);
-            Some(err_str)
-        } else {
-            None
-        }
-    }
 }
 
 #[test]
 fn connection_pool_claim() {
-    let plain = slog_term::PlainSyncDecorator::new(std::io::stdout());
-    let log = Logger::root(
-        Mutex::new(slog_term::FullFormat::new(plain).build()).fuse(),
-        o!("build-id" => "0.1.0"),
-    );
-
     // Only use one backend to keep the test deterministic. Cueball allows for
     // some slop in the maximum number of pool connections as new backends come
     // online and connections are reblanced and having multiple backends that
@@ -111,20 +94,16 @@ fn connection_pool_claim() {
     let resolver = FakeResolver::new(vec![be1]);
 
     let pool_opts = ConnectionPoolOptions {
-        maximum: 3,
+        max_connections: Some(3),
         claim_timeout: Some(1000),
-        log: log.clone(),
+        log: None,
         rebalancer_action_delay: None,
         decoherence_interval: None,
     };
 
-    let max_connections = pool_opts.maximum.clone();
+    let max_connections = pool_opts.max_connections.unwrap().clone();
 
-    let pool = ConnectionPool::new(
-        pool_opts,
-        resolver,
-        DummyConnection::new,
-    );
+    let pool = ConnectionPool::new(pool_opts, resolver, DummyConnection::new);
 
     // Wait for total_connections to reach the maximum
     let mut all_conns_established = false;
@@ -191,12 +170,6 @@ fn connection_pool_claim() {
 
 #[test]
 fn connection_pool_stop() {
-    let plain = slog_term::PlainSyncDecorator::new(std::io::stdout());
-    let log = Logger::root(
-        Mutex::new(slog_term::FullFormat::new(plain).build()).fuse(),
-        o!("build-id" => "0.1.0"),
-    );
-
     // Only use one backend to keep the test deterministic. Cueball allows for
     // some slop in the maximum number of pool connections as new backends come
     // online and connections are reblanced and having multiple backends that
@@ -206,20 +179,17 @@ fn connection_pool_stop() {
     let resolver = FakeResolver::new(vec![be1]);
 
     let pool_opts = ConnectionPoolOptions {
-        maximum: 3,
+        max_connections: Some(3),
         claim_timeout: Some(1000),
-        log: log.clone(),
+        log: None,
         rebalancer_action_delay: None,
         decoherence_interval: None,
     };
 
-    let max_connections = pool_opts.maximum.clone();
+    let max_connections = pool_opts.max_connections.unwrap().clone();
 
-    let mut pool = ConnectionPool::new(
-        pool_opts,
-        resolver,
-        DummyConnection::new,
-    );
+    let mut pool =
+        ConnectionPool::new(pool_opts, resolver, DummyConnection::new);
 
     // Wait for total_connections to reach the maximum
     let mut all_conns_established = false;
@@ -239,12 +209,6 @@ fn connection_pool_stop() {
 // could be easily generated.
 #[test]
 fn connection_pool_accounting() {
-    let plain = slog_term::PlainSyncDecorator::new(std::io::stdout());
-    let log = Logger::root(
-        Mutex::new(slog_term::FullFormat::new(plain).build()).fuse(),
-        o!("build-id" => "0.1.0"),
-    );
-
     // Only use one backend to keep the test deterministic. Cueball allows for
     // some slop in the maximum number of pool connections as new backends come
     // online and connections are reblanced and having multiple backends that
@@ -254,20 +218,18 @@ fn connection_pool_accounting() {
     let resolver = FakeResolver::new(vec![be1]);
 
     let pool_opts = ConnectionPoolOptions {
-        maximum: 3,
+        max_connections: Some(3),
         claim_timeout: Some(1000),
-        log: log.clone(),
+        log: None,
         rebalancer_action_delay: None,
         decoherence_interval: None,
     };
 
-    let max_connections: ConnectionCount = pool_opts.maximum.clone().into();
+    let max_connections: ConnectionCount =
+        pool_opts.max_connections.unwrap().clone().into();
 
-    let mut pool = ConnectionPool::new(
-        pool_opts,
-        resolver,
-        DummyConnection::new,
-    );
+    let mut pool =
+        ConnectionPool::new(pool_opts, resolver, DummyConnection::new);
 
     // Wait for total_connections to reach the maximum
     let mut all_conns_established = false;
@@ -354,12 +316,6 @@ fn connection_pool_accounting() {
 
 #[test]
 fn connection_pool_decoherence() {
-    let plain = slog_term::PlainSyncDecorator::new(std::io::stdout());
-    let log = Logger::root(
-        Mutex::new(slog_term::FullFormat::new(plain).build()).fuse(),
-        o!("build-id" => "0.1.0"),
-    );
-
     let be1 = (IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 55555);
     let be2 = (IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 55556);
     let be3 = (IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 55557);
@@ -369,25 +325,21 @@ fn connection_pool_decoherence() {
     let be7 = (IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 55561);
     let be8 = (IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 55562);
 
-    let resolver = FakeResolver::new(
-        vec![be1, be2, be3, be4, be5, be6, be7, be8]
-    );
+    let resolver =
+        FakeResolver::new(vec![be1, be2, be3, be4, be5, be6, be7, be8]);
 
     let pool_opts = ConnectionPoolOptions {
-        maximum: 8,
+        max_connections: Some(8),
         claim_timeout: Some(1000),
-        log: log.clone(),
+        log: None,
         rebalancer_action_delay: Some(10000),
         decoherence_interval: Some(5),
     };
 
-    let max_connections: ConnectionCount = pool_opts.maximum.clone().into();
+    let max_connections: ConnectionCount =
+        pool_opts.max_connections.unwrap().clone().into();
 
-    let pool = ConnectionPool::new(
-        pool_opts,
-        resolver,
-        DummyConnection::new,
-    );
+    let pool = ConnectionPool::new(pool_opts, resolver, DummyConnection::new);
 
     // Wait for total_connections to reach the maximum
     let mut all_conns_established = false;

@@ -1,6 +1,4 @@
-/*
- * Copyright 2019 Joyent, Inc.
- */
+// Copyright 2019 Joyent, Inc.
 
 use std::cmp::Ordering;
 use std::collections::{HashMap, VecDeque};
@@ -13,7 +11,6 @@ use slog::Logger;
 
 use crate::backend::{Backend, BackendKey};
 use crate::connection::Connection;
-
 
 /// The connection counts for the connection pool
 #[derive(Copy, Clone, Debug)]
@@ -47,17 +44,24 @@ impl Default for ConnectionPoolStats {
 /// instantiate a new connection pool.
 #[derive(Debug)]
 pub struct ConnectionPoolOptions {
-    /// The maximum number of connections to maintain in the connection pool.
-    pub maximum: u32,
-    /// An optional timeout for blocking calls to request a connection from the
-    /// pool.
+    /// An optional maximum number of connections to maintain in the connection
+    /// pool. If not specified the default is 10.
+    pub max_connections: Option<u32>,
+    /// An optional timeout for blocking calls (`claim`) to request a connection
+    /// from the pool. If not specified the calls will block indefinitely.
     pub claim_timeout: Option<u64>,
-    /// A `slog` logger instance.
-    pub log: Logger,
+    /// An optional `slog` logger instance. If none is provided then the logging
+    /// will fall back to using the [`slog-stdlog`](https://docs.rs/slog-stdlog)
+    /// drain which is essentially the same as using the rust standard
+    /// [`log`](https://docs.rs/log) crate.
+    pub log: Option<Logger>,
     /// An optional delay time to avoid extra rebalancing work in case the
     /// resolver notifies the pool of multiple changes within a short
     /// period. The default is 100 milliseconds.
     pub rebalancer_action_delay: Option<u64>,
+    /// Optional decoherence interval in seconds. This represents the length of
+    /// the period of the decoherence shuffle. If not specified the default is
+    /// 300 seconds.
     pub decoherence_interval: Option<u64>,
 }
 
@@ -242,7 +246,10 @@ impl RebalanceCheck {
         (self.0).0.lock().unwrap()
     }
 
-    pub fn condvar_wait<'a>(&self, g: MutexGuard<'a, bool>) -> MutexGuard<'a, bool> {
+    pub fn condvar_wait<'a>(
+        &self,
+        g: MutexGuard<'a, bool>,
+    ) -> MutexGuard<'a, bool> {
         let timeout = Duration::from_millis(500);
         let wait_result = (self.0).1.wait_timeout(g, timeout).unwrap();
         wait_result.0
@@ -289,7 +296,7 @@ impl fmt::Display for ConnectionPoolState {
     }
 }
 
-/// Utility methods for shuffling a collection
+/// A trait that provides utility methods for shuffling a collection.
 pub trait ShuffleCollection {
     fn len(&self) -> usize;
     fn swap(&mut self, i: usize, j: usize);

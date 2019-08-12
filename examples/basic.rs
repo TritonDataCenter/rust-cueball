@@ -116,7 +116,6 @@ fn main() {
         log: log.clone(),
         rebalancer_action_delay: None,
         decoherence_interval: None,
-        decoherence_delay: None,
     };
 
     let pool = ConnectionPool::new(

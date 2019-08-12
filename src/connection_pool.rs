@@ -30,8 +30,6 @@ use crate::resolver::{
 
 // Rebalance delay in milliseconds
 const DEFAULT_REBALANCE_ACTION_DELAY: u64 = 100;
-// Decohere delay in milliseconds
-const DEFAULT_DECOHERENCE_DELAY: u64 = 100;
 // Decoherence interval in seconds
 const DEFAULT_DECOHERENCE_INTERVAL: u64 = 300;
 
@@ -50,7 +48,6 @@ pub struct ConnectionPool<C, R, F>
     rebalance_thread: Option<thread::JoinHandle<()>>,
     rebalancer_stop: Arc<AtomicBool>,
     decoherence_interval: Option<u64>,
-    decoherence_delay: Option<u64>,
     log: Logger,
     state: ConnectionPoolState,
     _resolver: PhantomData<R>,
@@ -76,7 +73,6 @@ where
             rebalance_thread: None,
             rebalancer_stop: self.rebalancer_stop.clone(),
             decoherence_interval: self.decoherence_interval,
-            decoherence_delay: self.decoherence_delay,
             log: self.log.clone(),
             state: self.state,
             _resolver: PhantomData,
@@ -161,12 +157,8 @@ F: FnMut(&Backend) -> C + Send + 'static
         let decoherence_interval = cpo
             .decoherence_interval
             .unwrap_or(DEFAULT_DECOHERENCE_INTERVAL);
-        let decoherence_delay = cpo
-            .decoherence_delay
-            .unwrap_or(DEFAULT_DECOHERENCE_DELAY);
         start_decoherence(
             decoherence_interval,
-            decoherence_delay,
             protected_data.clone(),
             cpo.log.clone(),
         );
@@ -183,7 +175,6 @@ F: FnMut(&Backend) -> C + Send + 'static
             rebalance_thread: Some(rebalance_thread),
             rebalancer_stop,
             decoherence_interval: Some(decoherence_interval),
-            decoherence_delay: Some(decoherence_delay),
             log: cpo.log,
             state: ConnectionPoolState::Running,
             _resolver: PhantomData,
@@ -914,7 +905,6 @@ fn rebalancer_loop<C, F>(
 /// Start a thread to run periodic decoherence on the connection pool
 fn start_decoherence<C> (
     decoherence_interval: u64,
-    decoherence_delay: u64,
     protected_data: ProtectedData<C>,
     log: Logger,
 )
@@ -922,9 +912,6 @@ where
     C: Connection
 {
     debug!(log, "starting decoherence task, interval {} seconds", decoherence_interval);
-
-    let sleep_time = time::Duration::from_millis(decoherence_delay);
-    thread::sleep(sleep_time);
 
     let mut planner = periodic::Planner::new();
     planner.add(

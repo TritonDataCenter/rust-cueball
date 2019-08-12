@@ -116,7 +116,6 @@ fn connection_pool_claim() {
         log: log.clone(),
         rebalancer_action_delay: None,
         decoherence_interval: None,
-        decoherence_delay: None,
     };
 
     let max_connections = pool_opts.maximum.clone();
@@ -212,7 +211,6 @@ fn connection_pool_stop() {
         log: log.clone(),
         rebalancer_action_delay: None,
         decoherence_interval: None,
-        decoherence_delay: None,
     };
 
     let max_connections = pool_opts.maximum.clone();
@@ -261,7 +259,6 @@ fn connection_pool_accounting() {
         log: log.clone(),
         rebalancer_action_delay: None,
         decoherence_interval: None,
-        decoherence_delay: Some(1000),
     };
 
     let max_connections: ConnectionCount = pool_opts.maximum.clone().into();
@@ -381,8 +378,7 @@ fn connection_pool_decoherence() {
         claim_timeout: Some(1000),
         log: log.clone(),
         rebalancer_action_delay: Some(10000),
-        decoherence_interval: Some(2),
-        decoherence_delay: Some(5000),
+        decoherence_interval: Some(5),
     };
 
     let max_connections: ConnectionCount = pool_opts.maximum.clone().into();

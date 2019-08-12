@@ -378,7 +378,7 @@ fn connection_pool_decoherence() {
         claim_timeout: Some(1000),
         log: log.clone(),
         rebalancer_action_delay: Some(10000),
-        decoherence_interval: None,
+        decoherence_interval: Some(5),
     };
 
     let max_connections: ConnectionCount = pool_opts.maximum.clone().into();

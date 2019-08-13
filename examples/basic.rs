@@ -1,3 +1,5 @@
+// Copyright 2019 Joyent, Inc.
+
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Barrier, Mutex};
@@ -47,7 +49,6 @@ impl Connection for DummyConnection {
 pub struct FakeResolver {
     backends: Vec<(BackendAddress, BackendPort)>,
     pool_tx: Option<Sender<BackendMsg>>,
-    error: Option<Error>,
     started: bool,
 }
 
@@ -56,7 +57,6 @@ impl FakeResolver {
         FakeResolver {
             backends: backends,
             pool_tx: None,
-            error: None,
             started: false,
         }
     }
@@ -83,15 +83,6 @@ impl Resolver for FakeResolver {
         self.started = false;
         ()
     }
-
-    fn get_last_error(&self) -> Option<String> {
-        if let Some(err) = &self.error {
-            let err_str = format!("{}", err);
-            Some(err_str)
-        } else {
-            None
-        }
-    }
 }
 
 fn main() {
@@ -111,18 +102,14 @@ fn main() {
     let resolver = FakeResolver::new(vec![be1, be2, be3]);
 
     let pool_opts = ConnectionPoolOptions {
-        maximum: 3,
+        max_connections: Some(3),
         claim_timeout: Some(1000),
-        log: log.clone(),
+        log: Some(log),
         rebalancer_action_delay: None,
         decoherence_interval: None,
     };
 
-    let pool = ConnectionPool::new(
-        pool_opts,
-        resolver,
-        DummyConnection::new,
-    );
+    let pool = ConnectionPool::new(pool_opts, resolver, DummyConnection::new);
 
     // Backend initialization happens asynchronously so give the backends some
     // time to get started

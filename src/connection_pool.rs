@@ -116,7 +116,7 @@ where
             // Wait until ConnectonPool is created
             barrier_clone.wait();
 
-            resolver.start(resolver_tx_clone);
+            resolver.run(resolver_tx_clone);
         });
 
         let protected_data = ProtectedData::new(connection_data);
@@ -209,10 +209,12 @@ where
 
             // Notify the resolver, resolver_recv, and rebalancer threads to
             // shutdown.  Join on the thread handles for the resolver receiver
-            // and rebalancer threads. Do not join on the resolver thread
-            // because the code is not controlled by the pool and may not
-            // properly respond to the resolver receiver thread stopping. Just
-            // drop the JoinHandle for the resolver thread and move along.
+            // and rebalancer threads. If the resolver is well-behaved, dropping
+            // all clones of the receiver channel should cause the resolver to
+            // shut down. Do not join on the resolver thread because the code is
+            // not controlled by the pool and may not properly respond to the
+            // resolver receiver thread stopping. Just drop the JoinHandle for
+            // the resolver thread and move along.
             self.rebalancer_stop.store(true, AtomicOrdering::Relaxed);
             let resolver_tx = self.resolver_tx.take().unwrap();
             match resolver_tx.send(BackendMsg::StopMsg) {
@@ -881,6 +883,9 @@ fn resolver_recv_loop<C>(
             }
             Ok(BackendMsg::StopMsg) => {
                 done = true;
+                None
+            }
+            Ok(BackendMsg::HeartbeatMsg) => {
                 None
             }
             Err(_recv_err) => {

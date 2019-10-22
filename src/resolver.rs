@@ -14,12 +14,12 @@ use crate::backend;
 pub trait Resolver: Send + 'static {
     /// Start the operation of the resolver. Begin querying for backends and
     /// notifying the connection pool using the provided [`Sender`](https://doc.rust-lang.org/std/sync/mpsc/struct.Sender.html).
-    fn start(&mut self, s: Sender<BackendMsg>);
-    /// Shutdown the resolver. Cease querying for new backends. In the event
-    /// that attempting to send a message on the [`Sender`](https://doc.rust-lang.org/std/sync/mpsc/struct.Sender.html) channel provided in
-    /// `start` fails with an error then this method should be
-    /// called as it indicates the connection pool is shutting down.
-    fn stop(&mut self);
+    ///
+    /// This function is expected to block while the resolver is running, and
+    /// return if the receiving end of the channel is closed, or if the Resolver
+    /// encounters an unrecoverable error of any sort. Thus, callers can shut
+    /// down the resolver by closing the receiving end of the channel.
+    fn run(&mut self, s: Sender<BackendMsg>);
 }
 
 /// Represents the message that should be sent to the connection pool when a new
@@ -46,6 +46,10 @@ pub enum BackendMsg {
     // For internal pool use only
     #[doc(hidden)]
     StopMsg,
+    // For internal pool use only. Resolver implementations can send this
+    // message to test whether or not the channel has been closed.
+    #[doc(hidden)]
+    HeartbeatMsg
 }
 
 /// Returned from the functions used by the connection pool to add or remove

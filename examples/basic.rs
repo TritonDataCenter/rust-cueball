@@ -4,6 +4,7 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Barrier, Mutex};
 use std::{thread, time};
+use std::time::Duration;
 
 use slog::{info, o, Drain, Logger};
 
@@ -14,6 +15,8 @@ use cueball::connection_pool::types::ConnectionPoolOptions;
 use cueball::connection_pool::ConnectionPool;
 use cueball::error::Error;
 use cueball::resolver::{BackendAddedMsg, BackendMsg, Resolver};
+
+const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
 
 #[derive(Debug)]
 pub struct DummyConnection {
@@ -49,7 +52,7 @@ impl Connection for DummyConnection {
 pub struct FakeResolver {
     backends: Vec<(BackendAddress, BackendPort)>,
     pool_tx: Option<Sender<BackendMsg>>,
-    started: bool,
+    running: bool,
 }
 
 impl FakeResolver {
@@ -57,31 +60,36 @@ impl FakeResolver {
         FakeResolver {
             backends: backends,
             pool_tx: None,
-            started: false,
+            running: false,
         }
     }
 }
 
 impl Resolver for FakeResolver {
-    fn start(&mut self, s: Sender<BackendMsg>) {
-        if !self.started {
-            self.backends.iter().for_each(|b| {
-                let backend = Backend::new(&b.0, b.1);
-                let backend_key = backend::srv_key(&backend);
-                let backend_msg = BackendMsg::AddedMsg(BackendAddedMsg {
-                    key: backend_key,
-                    backend: backend,
-                });
-                s.send(backend_msg).unwrap();
-            });
-            self.pool_tx = Some(s);
-            self.started = true;
+   fn run(&mut self, s: Sender<BackendMsg>) {
+        if self.running {
+            return;
         }
-    }
+        self.running = true;
+        self.backends.iter().for_each(|b| {
+            let backend = Backend::new(&b.0, b.1);
+            let backend_key = backend::srv_key(&backend);
+            let backend_msg = BackendMsg::AddedMsg(BackendAddedMsg {
+                key: backend_key,
+                backend: backend,
+            });
+            s.send(backend_msg).unwrap();
+        });
+        self.pool_tx = Some(s);
 
-    fn stop(&mut self) {
-        self.started = false;
-        ()
+        loop {
+            if self.pool_tx.as_ref().unwrap().send(BackendMsg::HeartbeatMsg).
+                is_err() {
+                break;
+            }
+            thread::sleep(HEARTBEAT_INTERVAL);
+        }
+        self.running = false;
     }
 }
 

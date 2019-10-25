@@ -1,7 +1,11 @@
 [package]
 name = "cueball"
-version = "0.1.0"
-authors = ["Kelly McLaughlin <kelly.mclaughlin@joyent.com>", "Jon Anderson <jon.anderson@joyent.com>"]
+version = "0.2.0"
+authors = [
+	"Kelly McLaughlin <kelly.mclaughlin@joyent.com>",
+	"Jon Anderson <jon.anderson@joyent.com>",
+	"Isaac Davis <isaac.davis@joyent.com>"
+]
 edition = "2018"
 
 [dependencies]

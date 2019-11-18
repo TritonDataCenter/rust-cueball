@@ -31,6 +31,14 @@ pub struct BackendAddedMsg {
     pub backend: backend::Backend,
 }
 
+impl PartialEq for BackendAddedMsg {
+    fn eq(&self, other: &Self) -> bool {
+        self.key == other.key
+    }
+}
+
+impl Eq for BackendAddedMsg {}
+
 /// Represents the message that should be sent to the backend when a backend is
 /// no longer available.
 pub struct BackendRemovedMsg(pub backend::BackendKey);
@@ -51,6 +59,28 @@ pub enum BackendMsg {
     #[doc(hidden)]
     HeartbeatMsg
 }
+
+impl PartialEq for BackendMsg {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (BackendMsg::AddedMsg(a), BackendMsg::AddedMsg(b)) => {
+                a == b
+            },
+            (BackendMsg::RemovedMsg(a), BackendMsg::RemovedMsg(b)) => {
+                a.0 == b.0
+            },
+            (BackendMsg::StopMsg, BackendMsg::StopMsg) => {
+                true
+            },
+            (BackendMsg::HeartbeatMsg, BackendMsg::HeartbeatMsg) => {
+                true
+            },
+            _ => false
+        }
+    }
+}
+
+impl Eq for BackendMsg {}
 
 /// Returned from the functions used by the connection pool to add or remove
 /// backends based on the receipt of [`BackedMsg`]](enum.BackendAction.html)s by the pool.

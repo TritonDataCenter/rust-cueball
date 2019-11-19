@@ -97,7 +97,7 @@ where
 
         let logger = cpo
             .log
-            .unwrap_or(Logger::root(slog_stdlog::StdLog.fuse(), o!()));
+            .unwrap_or_else(|| Logger::root(slog_stdlog::StdLog.fuse(), o!()));
 
         // Create a channel to receive notifications from the resolver. The
         // connection pool make a copy of the resolver_tx side of the channel

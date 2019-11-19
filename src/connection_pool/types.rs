@@ -299,10 +299,14 @@ impl fmt::Display for ConnectionPoolState {
 /// A trait that provides utility methods for shuffling a collection.
 pub trait ShuffleCollection {
     fn len(&self) -> usize;
+    fn is_empty(&self) -> bool;
     fn swap(&mut self, i: usize, j: usize);
 }
 
 impl<T> ShuffleCollection for VecDeque<T> {
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
     fn len(&self) -> usize {
         self.len()
     }

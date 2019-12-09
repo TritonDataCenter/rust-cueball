@@ -28,6 +28,12 @@ pub trait Connection: Send + Sized + 'static {
     /// input parameters to `ConnectionPool::new`. Returns an [`error`](
     /// ../error/enum.Error.html) if the connection attempt fails.
     fn connect(&mut self) -> Result<(), Self::Error>;
+    /// check the to see if connection is still up and working. The connection pool runs this
+    /// function as the connection is being replaced and triggers a rebalance if the
+    /// connection is unhealthy.
+    fn is_valid(&mut self) -> bool;
+    // Check to see if the connection has closed or is not operational.
+    fn has_broken(&mut self) -> bool;
     /// Close the connection to the backend
     fn close(&mut self) -> Result<(), Self::Error>;
 }

@@ -2,6 +2,7 @@
 
 pub mod types;
 
+use backoff::{ExponentialBackoff, Operation};
 use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::marker::PhantomData;
@@ -535,8 +536,17 @@ where
     {
         let mut connection_data = self.protected_data.connection_data_lock();
         let (key, m_conn) = connection_key_pair.into();
-        connection_data.connections.push_back((key, m_conn).into());
-        connection_data.stats.idle_connections += 1.into();
+        match m_conn {
+            Some(mut conn) => {
+                if conn.is_valid() {
+                    connection_data.connections.push_back((key, conn).into());
+                    connection_data.stats.idle_connections += 1.into();
+                } else {
+                    warn!(self.log, "Found an invalid connection, not returning to the pool");
+                }
+            },
+            None => warn!(self.log, "Connection not found")
+        }
         self.protected_data.condvar_notify();
     }
 }
@@ -818,7 +828,20 @@ fn add_connections<C, F>(
                 let m_backend = connection_data.backends.get(b_key);
                 if let Some(backend) = m_backend {
                     let mut conn = create_connection(backend);
-                    conn.connect()
+                    let mut backoff = ExponentialBackoff::default();
+                    let mut op = || {
+                        conn.connect()
+                         .map_err(|e| {
+                            error!(
+                                log,
+                                "Retrying connection \
+                                 : {}",
+                                e
+                            );
+                        })?;
+                        Ok(())
+                    };
+                    op.retry(&mut backoff)
                         .and_then(|_| {
                             // Update connection info and stats
                             let connection_key_pair =
@@ -837,20 +860,18 @@ fn add_connections<C, F>(
                             );
                             protected_data.condvar_notify();
                             Ok(())
-                        })
-                        .unwrap_or_else(|e| {
-                            error!(
-                                log,
-                                "Error occurred trying to establish connection \
-                                 : {}",
-                                e
-                            );
-                        });
+                    })
+                    .unwrap_or_else(|_| {
+                        error!(
+                            log,
+                            "Giving up trying to establish connection"
+                        );
+                    });
                 } else {
                     error!(
                         log,
                         "No backend information available for \
-                         backend key {}",
+                        backend key {}",
                         &b_key
                     );
                 }
@@ -860,7 +881,7 @@ fn add_connections<C, F>(
                 debug!(log, "{}", msg);
             }
         }
-    })
+    });
 }
 
 fn resolver_recv_loop<C>(

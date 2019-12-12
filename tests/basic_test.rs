@@ -3,8 +3,8 @@
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Barrier};
-use std::{thread, time};
 use std::time::Duration;
+use std::{thread, time};
 
 use cueball::backend;
 use cueball::backend::{Backend, BackendAddress, BackendPort};
@@ -44,6 +44,7 @@ impl Connection for DummyConnection {
     fn is_valid(&mut self) -> bool {
         true
     }
+
     fn has_broken(&mut self) -> bool {
         false
     }
@@ -88,8 +89,13 @@ impl Resolver for FakeResolver {
         self.pool_tx = Some(s);
 
         loop {
-            if self.pool_tx.as_ref().unwrap().send(BackendMsg::HeartbeatMsg).
-                is_err() {
+            if self
+                .pool_tx
+                .as_ref()
+                .unwrap()
+                .send(BackendMsg::HeartbeatMsg)
+                .is_err()
+            {
                 break;
             }
             thread::sleep(HEARTBEAT_INTERVAL);
@@ -114,6 +120,7 @@ fn connection_pool_claim() {
         log: None,
         rebalancer_action_delay: None,
         decoherence_interval: None,
+        connection_check_interval: None,
     };
 
     let max_connections = pool_opts.max_connections.unwrap().clone();
@@ -199,6 +206,7 @@ fn connection_pool_stop() {
         log: None,
         rebalancer_action_delay: None,
         decoherence_interval: None,
+        connection_check_interval: None,
     };
 
     let max_connections = pool_opts.max_connections.unwrap().clone();
@@ -238,6 +246,7 @@ fn connection_pool_accounting() {
         log: None,
         rebalancer_action_delay: None,
         decoherence_interval: None,
+        connection_check_interval: None,
     };
 
     let max_connections: ConnectionCount =
@@ -349,6 +358,7 @@ fn connection_pool_decoherence() {
         log: None,
         rebalancer_action_delay: Some(10000),
         decoherence_interval: Some(5),
+        connection_check_interval: None,
     };
 
     let max_connections: ConnectionCount =

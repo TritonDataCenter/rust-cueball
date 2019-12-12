@@ -33,7 +33,7 @@ pub trait Connection: Send + Sized + 'static {
     /// connection is unhealthy.
     fn is_valid(&mut self) -> bool;
     // Check to see if the connection has closed or is not operational.
-    fn has_broken(&mut self) -> bool;
+    fn has_broken(&self) -> bool;
     /// Close the connection to the backend
     fn close(&mut self) -> Result<(), Self::Error>;
 }

@@ -2,7 +2,6 @@
 
 pub mod types;
 
-use backoff::{ExponentialBackoff, Operation};
 use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::marker::PhantomData;
@@ -14,7 +13,7 @@ use std::sync::{Arc, Barrier};
 use std::time::Duration;
 use std::{thread, time};
 
-use slog::{debug, error, info, o, warn, Drain, Logger};
+use slog::{debug, error, info, o, trace, warn, Drain, Logger};
 
 use crate::backend::{Backend, BackendKey};
 use crate::connection::Connection;
@@ -27,6 +26,7 @@ use crate::error::Error;
 use crate::resolver::{
     BackendAction, BackendAddedMsg, BackendMsg, BackendRemovedMsg, Resolver,
 };
+use backoff::{ExponentialBackoff, Operation};
 
 // Default number of maximum pool connections
 const DEFAULT_MAX_CONNECTIONS: u32 = 10;
@@ -34,6 +34,8 @@ const DEFAULT_MAX_CONNECTIONS: u32 = 10;
 const DEFAULT_REBALANCE_ACTION_DELAY: u64 = 100;
 // Decoherence interval in seconds
 const DEFAULT_DECOHERENCE_INTERVAL: u64 = 300;
+// Connection health check interval in seconds
+const DEFAULT_CONNECTION_CHECK_INTERVAL: u64 = 30;
 
 /// A pool of connections to a multi-node service
 #[derive(Debug)]
@@ -166,6 +168,17 @@ where
         start_decoherence(
             decoherence_interval,
             protected_data.clone(),
+            logger.clone(),
+        );
+
+        let connection_check_interval = cpo
+            .connection_check_interval
+            .unwrap_or(DEFAULT_CONNECTION_CHECK_INTERVAL);
+
+        start_connection_check(
+            connection_check_interval,
+            protected_data.clone(),
+            rebalancer_check.clone(),
             logger.clone(),
         );
 
@@ -325,7 +338,7 @@ where
             connection_data = self.protected_data.connection_data_lock();
             connection_data.stats.total_connections = 0.into();
 
-            // Move state to Stopped
+            // Move state too
             self.state = ConnectionPoolState::Stopped;
             Ok(())
         } else {
@@ -537,15 +550,15 @@ where
         let mut connection_data = self.protected_data.connection_data_lock();
         let (key, m_conn) = connection_key_pair.into();
         match m_conn {
-            Some(mut conn) => {
-                if conn.is_valid() {
+            Some(conn) => {
+                if conn.has_broken() {
+                    warn!(self.log, "Found an invalid connection, not returning to the pool");
+                } else {
                     connection_data.connections.push_back((key, conn).into());
                     connection_data.stats.idle_connections += 1.into();
-                } else {
-                    warn!(self.log, "Found an invalid connection, not returning to the pool");
                 }
-            },
-            None => warn!(self.log, "Connection not found")
+            }
+            None => warn!(self.log, "Connection not found"),
         }
         self.protected_data.condvar_notify();
     }
@@ -680,6 +693,11 @@ where
     C: Connection,
 {
     let mut connection_data = protected_data.connection_data_lock();
+    debug!(
+        log,
+        "Running rebalancer on {} connections...",
+        connection_data.connections.len()
+    );
 
     // Calculate a new connection distribution over the set of available
     // backends and determine what additional connections need to be created and
@@ -825,13 +843,17 @@ fn add_connections<C, F>(
 
             if net_total_connections < max_connections.into() {
                 // Try to establish connection
+                debug!(
+                    log,
+                    "Trying to add more connections: {}", net_total_connections
+                );
                 let m_backend = connection_data.backends.get(b_key);
                 if let Some(backend) = m_backend {
                     let mut conn = create_connection(backend);
                     let mut backoff = ExponentialBackoff::default();
                     let mut op = || {
-                        conn.connect()
-                         .map_err(|e| {
+                        debug!(log, "attempting to connect with retry...");
+                        conn.connect().map_err(|e| {
                             error!(
                                 log,
                                 "Retrying connection \
@@ -860,18 +882,18 @@ fn add_connections<C, F>(
                             );
                             protected_data.condvar_notify();
                             Ok(())
-                    })
-                    .unwrap_or_else(|_| {
-                        error!(
-                            log,
-                            "Giving up trying to establish connection"
-                        );
-                    });
+                        })
+                        .unwrap_or_else(|_| {
+                            error!(
+                                log,
+                                "Giving up trying to establish connection"
+                            );
+                        });
                 } else {
                     error!(
                         log,
                         "No backend information available for \
-                        backend key {}",
+                         backend key {}",
                         &b_key
                     );
                 }
@@ -906,9 +928,7 @@ fn resolver_recv_loop<C>(
                 done = true;
                 None
             }
-            Ok(BackendMsg::HeartbeatMsg) => {
-                None
-            }
+            Ok(BackendMsg::HeartbeatMsg) => None,
             Err(_recv_err) => {
                 done = true;
                 None
@@ -963,7 +983,10 @@ fn rebalancer_loop<C, F>(
                 protected_data.clone(),
             );
 
-            debug!(log, "Connection rebalance completed");
+            debug!(
+                log,
+                "Connection rebalance completed: {:#?}", rebalance_result
+            );
 
             if let Ok(Some(added_connection_count)) = rebalance_result {
                 debug!(log, "Adding new connections");
@@ -1032,5 +1055,93 @@ where
             "randomization puts item at idx {} to idx {}", i, new_idx
         );
         connections.swap(i, new_idx);
+    }
+}
+
+/// Start a thread to run periodic decoherence on the connection pool
+fn start_connection_check<C>(
+    conn_check_interval: u64,
+    protected_data: ProtectedData<C>,
+    rebalance_check: RebalanceCheck,
+    log: Logger,
+) where
+    C: Connection,
+{
+    debug!(
+        log,
+        "starting connection health task, interval {} seconds",
+        conn_check_interval
+    );
+
+    let mut planner = periodic::Planner::new();
+    planner.add(
+        move || {
+            check_pool_connections(
+                protected_data.clone(),
+                rebalance_check.clone(),
+                log.clone(),
+            )
+        },
+        periodic::Every::new(Duration::from_secs(conn_check_interval)),
+    );
+    planner.start();
+}
+
+fn check_pool_connections<C>(
+    protected_data: ProtectedData<C>,
+    rebalance_check: RebalanceCheck,
+    log: Logger,
+) where
+    C: Connection,
+{
+    let mut connection_data = protected_data.connection_data_lock();
+    debug!(
+        log,
+        "Performing connection check on {} connections",
+        connection_data.connections.len()
+    );
+
+    let backend_count = connection_data.backends.len();
+    let mut remove_count = HashMap::with_capacity(backend_count);
+    let mut removed = 0;
+    connection_data.connections.retain(|pair| match pair {
+        ConnectionKeyPair((key, Some(conn))) => {
+            if conn.has_broken() {
+                removed += 1;
+                *remove_count.entry(key.clone()).or_insert(0) += 1;
+                false
+            } else {
+                true
+            }
+        }
+        ConnectionKeyPair((_key, None)) => {
+            warn!(log, "found malformed connection");
+            removed += 1;
+            false
+        }
+    });
+
+    for (key, count) in remove_count.iter() {
+        connection_data
+            .connection_distribution
+            .entry(key.clone())
+            .and_modify(|e| {
+                *e -= ConnectionCount::from(*count);
+                debug!(log, "Connection count for {} now: {}", key.clone(), *e);
+            });
+        connection_data
+            .unwanted_connection_counts
+            .entry(key.clone())
+            .and_modify(|e| *e += ConnectionCount::from(*count))
+            .or_insert(ConnectionCount::from(*count));
+    }
+    connection_data.stats.idle_connections -= removed.into();
+
+    trace!(log, "calling get_lock on rebalance check");
+    let mut rebalance = rebalance_check.get_lock();
+    if !*rebalance {
+        *rebalance = true;
+        rebalance_check.condvar_notify();
+        trace!(log, "called condvar_notify() rebalance check");
     }
 }

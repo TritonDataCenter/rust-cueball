@@ -63,6 +63,10 @@ pub struct ConnectionPoolOptions {
     /// the period of the decoherence shuffle. If not specified the default is
     /// 300 seconds.
     pub decoherence_interval: Option<u64>,
+    /// Optional connection check interval in seconds. This represents the length of
+    /// the period of the pool connection check task. If not specified the default is
+    /// 30 seconds.
+    pub connection_check_interval: Option<u64>,
 }
 
 // This type wraps a pair that associates a `BackendKey` with a connection of

@@ -3,8 +3,8 @@
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Barrier, Mutex};
-use std::{thread, time};
 use std::time::Duration;
+use std::{thread, time};
 
 use slog::{info, o, Drain, Logger};
 
@@ -51,7 +51,7 @@ impl Connection for DummyConnection {
     fn is_valid(&mut self) -> bool {
         true
     }
-    fn has_broken(&mut self) -> bool {
+    fn has_broken(&self) -> bool {
         false
     }
 }
@@ -73,7 +73,7 @@ impl FakeResolver {
 }
 
 impl Resolver for FakeResolver {
-   fn run(&mut self, s: Sender<BackendMsg>) {
+    fn run(&mut self, s: Sender<BackendMsg>) {
         if self.running {
             return;
         }
@@ -90,8 +90,13 @@ impl Resolver for FakeResolver {
         self.pool_tx = Some(s);
 
         loop {
-            if self.pool_tx.as_ref().unwrap().send(BackendMsg::HeartbeatMsg).
-                is_err() {
+            if self
+                .pool_tx
+                .as_ref()
+                .unwrap()
+                .send(BackendMsg::HeartbeatMsg)
+                .is_err()
+            {
                 break;
             }
             thread::sleep(HEARTBEAT_INTERVAL);
@@ -122,6 +127,7 @@ fn main() {
         log: Some(log),
         rebalancer_action_delay: None,
         decoherence_interval: None,
+        connection_check_interval: None,
     };
 
     let pool = ConnectionPool::new(pool_opts, resolver, DummyConnection::new);

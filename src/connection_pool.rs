@@ -338,7 +338,7 @@ where
             connection_data = self.protected_data.connection_data_lock();
             connection_data.stats.total_connections = 0.into();
 
-            // Move state too
+            // Move state to Stopped
             self.state = ConnectionPoolState::Stopped;
             Ok(())
         } else {

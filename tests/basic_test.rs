@@ -41,14 +41,6 @@ impl Connection for DummyConnection {
         Ok(())
     }
 
-    fn is_valid(&mut self) -> bool {
-        true
-    }
-
-    fn has_broken(&mut self) -> bool {
-        false
-    }
-
     fn close(&mut self) -> Result<(), Error> {
         self.connected = false;
         Ok(())

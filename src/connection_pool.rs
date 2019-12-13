@@ -13,7 +13,7 @@ use std::sync::{Arc, Barrier};
 use std::time::Duration;
 use std::{thread, time};
 
-use slog::{debug, error, info, o, trace, warn, Drain, Logger};
+use slog::{debug, error, info, o, warn, Drain, Logger};
 
 use crate::backend::{Backend, BackendKey};
 use crate::connection::Connection;

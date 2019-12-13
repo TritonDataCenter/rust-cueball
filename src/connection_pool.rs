@@ -964,6 +964,7 @@ fn rebalancer_loop<C, F>(
     let mut done = stop.load(AtomicOrdering::Relaxed);
 
     while !done {
+        debug!(log, "Performing connection rebalance");
         let mut rebalance = rebalance_check.get_lock();
 
         rebalance = rebalance_check.condvar_wait(rebalance);
@@ -1058,7 +1059,7 @@ where
     }
 }
 
-/// Start a thread to run periodic decoherence on the connection pool
+/// Start a thread to run periodic health checks on the connection pool
 fn start_connection_check<C>(
     conn_check_interval: u64,
     protected_data: ProtectedData<C>,
@@ -1095,11 +1096,23 @@ fn check_pool_connections<C>(
     C: Connection,
 {
     let mut connection_data = protected_data.connection_data_lock();
-    debug!(
-        log,
-        "Performing connection check on {} connections",
-        connection_data.connections.len()
-    );
+    let len = connection_data.connections.len();
+
+    let mut rebalance = rebalance_check.get_lock();
+    if *rebalance {
+        debug!(
+            log,
+            "rebalance in progress, not proceeding with connection checks"
+        );
+        return;
+    }
+
+    if len == 0 {
+        debug!(log, "No connections to check.");
+        return;
+    }
+
+    debug!(log, "Performing connection check on {} connections", len);
 
     let backend_count = connection_data.backends.len();
     let mut remove_count = HashMap::with_capacity(backend_count);
@@ -1114,34 +1127,50 @@ fn check_pool_connections<C>(
                 true
             }
         }
-        ConnectionKeyPair((_key, None)) => {
+        ConnectionKeyPair((key, None)) => {
             warn!(log, "found malformed connection");
             removed += 1;
+            *remove_count.entry(key.clone()).or_insert(0) += 1;
             false
         }
     });
+    debug!(log, "Removed {} from connection pool", removed);
 
-    for (key, count) in remove_count.iter() {
-        connection_data
-            .connection_distribution
-            .entry(key.clone())
-            .and_modify(|e| {
-                *e -= ConnectionCount::from(*count);
-                debug!(log, "Connection count for {} now: {}", key.clone(), *e);
-            });
-        connection_data
-            .unwanted_connection_counts
-            .entry(key.clone())
-            .and_modify(|e| *e += ConnectionCount::from(*count))
-            .or_insert(ConnectionCount::from(*count));
-    }
-    connection_data.stats.idle_connections -= removed.into();
+    if removed > 0 {
+        for (key, count) in remove_count.iter() {
+            connection_data
+                .connection_distribution
+                .entry(key.clone())
+                .and_modify(|e| {
+                    *e -= ConnectionCount::from(*count);
+                    debug!(
+                        log,
+                        "Connection count for {} now: {}",
+                        key.clone(),
+                        *e
+                    );
+                });
+            connection_data
+                .unwanted_connection_counts
+                .entry(key.clone())
+                .and_modify(|e| {
+                    *e += ConnectionCount::from(*count);
+                    debug!(
+                        log,
+                        "Unwanted onnection count for {} now: {}",
+                        key.clone(),
+                        *e
+                    );
+                })
+                .or_insert(ConnectionCount::from(*count));
+        }
+        connection_data.stats.idle_connections -= removed.into();
 
-    trace!(log, "calling get_lock on rebalance check");
-    let mut rebalance = rebalance_check.get_lock();
-    if !*rebalance {
-        *rebalance = true;
-        rebalance_check.condvar_notify();
-        trace!(log, "called condvar_notify() rebalance check");
+        if !*rebalance {
+            debug!(log, "attempting to signal rebalance check");
+            *rebalance = true;
+            rebalance_check.condvar_notify();
+            debug!(log, "called condvar_notify() rebalance check");
+        }
     }
 }

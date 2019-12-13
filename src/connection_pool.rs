@@ -1162,7 +1162,7 @@ fn check_pool_connections<C>(
                         *e
                     );
                 })
-                .or_insert(ConnectionCount::from(*count));
+                .or_insert_with(|| ConnectionCount::from(*count));
         }
         connection_data.stats.idle_connections -= removed.into();
 

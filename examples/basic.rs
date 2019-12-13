@@ -47,13 +47,6 @@ impl Connection for DummyConnection {
         self.connected = false;
         Ok(())
     }
-
-    fn is_valid(&mut self) -> bool {
-        true
-    }
-    fn has_broken(&self) -> bool {
-        false
-    }
 }
 
 pub struct FakeResolver {

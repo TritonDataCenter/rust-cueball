@@ -1,22 +1,8 @@
-[package]
-name = "cueball"
-version = "0.2.1"
-authors = [
-        "Kelly McLaughlin <kelly.mclaughlin@joyent.com>",
-        "Jon Anderson <jon.anderson@joyent.com>",
-        "Isaac Davis <isaac.davis@joyent.com>"
+[workspace]
+members = [
+    "cueball",
+    "manatee-primary-resolver",
+    "static-resolver",
+    "postgres-connection",
+    "tcp-stream-connection",
 ]
-edition = "2018"
-
-[dependencies]
-base64 = "0.10.1"
-chrono = "0.4.7"
-periodic = "0.1.1"
-derive_more = "0.14.0"
-rand = "0.7.0"
-sha1 = "0.6.0"
-slog = "2"
-slog-stdlog = "3"
-
-[dev-dependencies]
-slog-term = "2.4.0"

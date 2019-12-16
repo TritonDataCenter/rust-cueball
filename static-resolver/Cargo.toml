@@ -1,0 +1,13 @@
+[package]
+name = "static-resolver"
+version = "0.2.0"
+authors = ["Kelly McLaughlin <kelly.mclaughlin@joyent.com>"]
+edition = "2018"
+
+[dependencies]
+cueball = { path = '../cueball' }
+
+[dev-dependencies]
+tcp-stream-connection = { path = '../tcp-stream-connection' }
+slog = "2.4.1"
+slog-term = "2.4.0"

@@ -73,10 +73,9 @@ impl<C: Debug, R: Debug, F: Debug> Debug for ConnectionPool<C, R, F> {
                 ref decoherence_interval,
                 ref log,
                 ref state,
-                decoherence_timer_guard: _,
-                decoherence_timer: _,
                 ref _resolver,
                 ref _connection_function,
+                ..
             } => {
                 let mut debug_trait_builder = f.debug_struct("ConnectionPool");
                 let _ = debug_trait_builder
@@ -336,7 +335,6 @@ where
             if self.decoherence_timer.is_some() {
                 let _timer = self.decoherence_timer.take();
             }
-            drop(&self.decoherence_timer_guard);
 
             // Wait for all outstanding threads to be returned to the pool and
             // close those

@@ -1045,7 +1045,6 @@ fn rebalancer_loop<C, F>(
     let mut done = stop.load(AtomicOrdering::Relaxed);
 
     while !done {
-        debug!(log, "Performing connection rebalance");
         let mut rebalance = rebalance_check.get_lock();
 
         rebalance = rebalance_check.condvar_wait(rebalance);
@@ -1057,7 +1056,7 @@ fn rebalancer_loop<C, F>(
                 time::Duration::from_millis(rebalance_action_delay);
             thread::sleep(sleep_time);
 
-            debug!(log, "Performing connection rebalance");
+            debug!(log, "rebalance var true");
 
             let rebalance_result = rebalance_connections(
                 max_connections,
@@ -1177,17 +1176,11 @@ fn check_pool_connections<C>(
     let mut connection_data = protected_data.connection_data_lock();
     let len = connection_data.connections.len();
 
-    let mut rebalance = rebalance_check.get_lock();
-    if *rebalance {
-        debug!(
-            log,
-            "rebalance in progress, not proceeding with connection checks"
-        );
-        return;
-    }
-
     if len == 0 {
-        debug!(log, "No connections to check.");
+        debug!(log, "No connections to check, signaling rebalance check");
+        let mut rebalance = rebalance_check.get_lock();
+        *rebalance = true;
+        rebalance_check.condvar_notify();
         return;
     }
 
@@ -1245,11 +1238,11 @@ fn check_pool_connections<C>(
         }
         connection_data.stats.idle_connections -= removed.into();
 
+        let mut rebalance = rebalance_check.get_lock();
         if !*rebalance {
             debug!(log, "attempting to signal rebalance check");
             *rebalance = true;
             rebalance_check.condvar_notify();
-            debug!(log, "called condvar_notify() rebalance check");
         }
     }
 }

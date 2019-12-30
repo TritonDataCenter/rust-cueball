@@ -57,25 +57,19 @@ pub enum BackendMsg {
     // For internal pool use only. Resolver implementations can send this
     // message to test whether or not the channel has been closed.
     #[doc(hidden)]
-    HeartbeatMsg
+    HeartbeatMsg,
 }
 
 impl PartialEq for BackendMsg {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
-            (BackendMsg::AddedMsg(a), BackendMsg::AddedMsg(b)) => {
-                a == b
-            },
+            (BackendMsg::AddedMsg(a), BackendMsg::AddedMsg(b)) => a == b,
             (BackendMsg::RemovedMsg(a), BackendMsg::RemovedMsg(b)) => {
                 a.0 == b.0
-            },
-            (BackendMsg::StopMsg, BackendMsg::StopMsg) => {
-                true
-            },
-            (BackendMsg::HeartbeatMsg, BackendMsg::HeartbeatMsg) => {
-                true
-            },
-            _ => false
+            }
+            (BackendMsg::StopMsg, BackendMsg::StopMsg) => true,
+            (BackendMsg::HeartbeatMsg, BackendMsg::HeartbeatMsg) => true,
+            _ => false,
         }
     }
 }

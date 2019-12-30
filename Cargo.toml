@@ -1,6 +1,6 @@
 [package]
 name = "cueball"
-version = "0.2.2"
+version = "0.3.0"
 authors = [
         "Kelly McLaughlin <kelly.mclaughlin@joyent.com>",
         "Jon Anderson <jon.anderson@joyent.com>",
@@ -9,6 +9,7 @@ authors = [
 edition = "2018"
 
 [dependencies]
+backoff = "0.1.5"
 base64 = "0.10.1"
 chrono = "0.4.9"
 derive_more = "0.14.0"

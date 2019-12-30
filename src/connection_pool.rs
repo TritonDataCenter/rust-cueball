@@ -55,9 +55,9 @@ pub struct ConnectionPool<C, R, F> {
     log: Logger,
     state: ConnectionPoolState,
     decoherence_timer: Option<timer::Timer>,
-    decoherence_timer_guard: Guard,
+    _decoherence_timer_guard: Option<Guard>,
     connection_check_timer: Option<timer::Timer>,
-    connection_check_timer_guard: Guard,
+    _connection_check_timer_guard: Option<Guard>,
     _resolver: PhantomData<R>,
     _connection_function: PhantomData<F>,
 }
@@ -135,11 +135,9 @@ where
             log: self.log.clone(),
             state: self.state,
             decoherence_timer: None,
-            decoherence_timer_guard: self.decoherence_timer_guard.clone(),
             connection_check_timer: None,
-            connection_check_timer_guard: self
-                .connection_check_timer_guard
-                .clone(),
+            _connection_check_timer_guard: None,
+            _decoherence_timer_guard: None,
             _resolver: PhantomData,
             _connection_function: PhantomData,
         }
@@ -266,9 +264,9 @@ where
             log: logger,
             state: ConnectionPoolState::Running,
             decoherence_timer: Some(decoherence_timer),
-            decoherence_timer_guard,
+            _decoherence_timer_guard: Some(decoherence_timer_guard),
             connection_check_timer: Some(connection_check_timer),
-            connection_check_timer_guard,
+            _connection_check_timer_guard: Some(connection_check_timer_guard),
             _resolver: PhantomData,
             _connection_function: PhantomData,
         };

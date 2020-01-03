@@ -1,0 +1,20 @@
+[package]
+name = "cueball-postgres-connection"
+version = "0.3.0"
+authors = ["Kelly McLaughlin <kelly.mclaughlin@joyent.com>"]
+edition = "2018"
+
+[dependencies]
+cueball = { path = '../../cueball' }
+native-tls = "0.2.3"
+postgres = "0.16.0-rc.1"
+postgres-protocol = "= 0.4.0"
+serde = "1.0.84"
+serde_derive = "1.0.84"
+tokio-postgres-native-tls = "0.1.0-rc.1"
+unicode-normalization = "=0.1.5"
+
+[dev-dependencies]
+cueball-static-resolver = { path = "../../resolvers/static-resolver" }
+slog = "2.4.1"
+slog-term = "2.4.0"

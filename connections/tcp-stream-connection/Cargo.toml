@@ -1,0 +1,8 @@
+[package]
+name = "cueball-tcp-stream-connection"
+version = "0.3.0"
+authors = ["Kelly McLaughlin <kelly.mclaughlin@joyent.com>"]
+edition = "2018"
+
+[dependencies]
+cueball = { path = '../../cueball' }

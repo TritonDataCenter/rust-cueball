@@ -1,0 +1,26 @@
+[package]
+name = "cueball-manatee-primary-resolver"
+version = "0.3.0"
+authors = ["Kelly McLaughlin <kelly.mclaughlin@joyent.com>", "Isaac Davis <isaac.davis@joyent.com>"]
+edition = "2018"
+
+[dependencies]
+cueball = { path = "../../cueball" }
+itertools = "0.8.0"
+failure = "0.1.5"
+futures = "0.1.28"
+rand = "0.6.4"
+serde = { version ="1.0.102", features = ["derive"]}
+serde_json = "1.0.40"
+slog = { version = "2.4.1", features = [ "max_level_trace" ] }
+slog-stdlog = "3"
+tokio = "0.1.22"
+tokio-zookeeper = { git = 'https://github.com/joyent/tokio-zookeeper', branch = "temp-fix"}
+unicode-normalization = "=0.1.5"
+url = "2.1.0"
+
+[dev-dependencies]
+clap = "2.32"
+quickcheck = "0.8.0"
+slog-bunyan = { git = "https://github.com/slog-rs/bunyan" }
+uuid = { version = "0.8", features = ["v4"] }

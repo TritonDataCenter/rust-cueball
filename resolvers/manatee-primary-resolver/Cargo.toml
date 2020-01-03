@@ -1,11 +1,11 @@
 [package]
 name = "manatee-primary-resolver"
-version = "0.1.0"
+version = "0.3.0"
 authors = ["Kelly McLaughlin <kelly.mclaughlin@joyent.com>", "Isaac Davis <isaac.davis@joyent.com>"]
 edition = "2018"
 
 [dependencies]
-cueball = { path = "../cueball" }
+cueball = { path = "../../cueball" }
 itertools = "0.8.0"
 failure = "0.1.5"
 futures = "0.1.28"

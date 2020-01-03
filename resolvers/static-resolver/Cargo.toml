@@ -1,5 +1,5 @@
 [package]
-name = "static-resolver"
+name = "cueball-static-resolver"
 version = "0.2.0"
 authors = ["Kelly McLaughlin <kelly.mclaughlin@joyent.com>"]
 edition = "2018"
@@ -8,6 +8,6 @@ edition = "2018"
 cueball = { path = '../../cueball' }
 
 [dev-dependencies]
-tcp-stream-connection = { path = '../../connections/tcp-stream-connection' }
+cueball-tcp-stream-connection = { path = '../../connections/tcp-stream-connection' }
 slog = "2.4.1"
 slog-term = "2.4.0"

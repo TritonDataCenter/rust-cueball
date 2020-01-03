@@ -1,5 +1,5 @@
 [package]
-name = "manatee-primary-resolver"
+name = "cueball-manatee-primary-resolver"
 version = "0.3.0"
 authors = ["Kelly McLaughlin <kelly.mclaughlin@joyent.com>", "Isaac Davis <isaac.davis@joyent.com>"]
 edition = "2018"

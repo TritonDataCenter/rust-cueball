@@ -1,8 +1,8 @@
 [workspace]
 members = [
+    "resolvers/manatee-primary-resolver",
+    "resolvers/static-resolver",
+    "connections/postgres-connection",
+    "connections/tcp-stream-connection",
     "cueball",
-    "manatee-primary-resolver",
-    "static-resolver",
-    "postgres-connection",
-    "tcp-stream-connection",
 ]

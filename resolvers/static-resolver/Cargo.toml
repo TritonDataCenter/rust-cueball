@@ -5,9 +5,9 @@ authors = ["Kelly McLaughlin <kelly.mclaughlin@joyent.com>"]
 edition = "2018"
 
 [dependencies]
-cueball = { path = '../cueball' }
+cueball = { path = '../../cueball' }
 
 [dev-dependencies]
-tcp-stream-connection = { path = '../tcp-stream-connection' }
+tcp-stream-connection = { path = '../../connections/tcp-stream-connection' }
 slog = "2.4.1"
 slog-term = "2.4.0"

@@ -58,16 +58,12 @@ impl Connection for PostgresConnection {
     }
 
     fn is_valid(&mut self) -> bool {
-        match self
+        self
             .connection
             .as_mut()
             .unwrap()
             .simple_query("")
-            .map(|_| ())
-        {
-            Ok(_) => true,
-            Err(_) => false,
-        }
+            .map(|_| ()).is_ok()
     }
 
     fn has_broken(&self) -> bool {

@@ -14,7 +14,7 @@ pub struct StaticIpResolver {
 impl StaticIpResolver {
     pub fn new(backends: Vec<(BackendAddress, BackendPort)>) -> Self {
         StaticIpResolver {
-            backends: backends,
+            backends,
             pool_tx: None,
             started: false,
         }
@@ -29,7 +29,7 @@ impl Resolver for StaticIpResolver {
                 let backend_key = srv_key(&backend);
                 let backend_msg = BackendMsg::AddedMsg(BackendAddedMsg {
                     key: backend_key,
-                    backend: backend,
+                    backend,
                 });
                 s.send(backend_msg).unwrap();
             });

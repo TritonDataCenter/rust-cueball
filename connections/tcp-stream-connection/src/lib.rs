@@ -20,7 +20,7 @@ impl TcpStreamWrapper {
 
         TcpStreamWrapper {
             stream: None,
-            addr: addr,
+            addr,
             connected: false,
         }
     }

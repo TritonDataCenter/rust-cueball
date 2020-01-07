@@ -2,6 +2,12 @@
 name = "cueball-postgres-connection"
 version = "0.3.0"
 authors = ["Kelly McLaughlin <kelly.mclaughlin@joyent.com>"]
+description = """
+This is an implementation of the cueball Connection trait forpostgres::Client from the rust-postgres crate.
+"""
+repository = "https://github.com/joyent/cueball"
+readme = "../../README.md"
+license = "Mozilla"
 edition = "2018"
 
 [dependencies]

@@ -5,9 +5,10 @@ authors = ["Kelly McLaughlin <kelly.mclaughlin@joyent.com>"]
 description = """
 This is an implementation of the cueball Connection trait forpostgres::Client from the rust-postgres crate.
 """
-repository = "https://github.com/joyent/cueball"
+repository = "https://github.com/joyent/rust-cueball"
+keywords = ["pool","joyent"]
 readme = "../../README.md"
-license = "Mozilla"
+license = "MPL-2.0"
 edition = "2018"
 
 [dependencies]

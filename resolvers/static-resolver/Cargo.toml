@@ -5,9 +5,10 @@ authors = ["Kelly McLaughlin <kelly.mclaughlin@joyent.com>"]
 description = """
 This is an implementation of the cueball Resolver trait that provides a static list of backends for use by the connection pool.
 """
-repository = "https://github.com/joyent/cueball"
+repository = "https://github.com/joyent/rust-cueball"
+keywords = ["pool","joyent"]
 readme = "../../README.md"
-license = "Mozilla"
+license = "MPL-2.0"
 edition = "2018"
 
 [dependencies]

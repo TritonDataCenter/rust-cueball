@@ -202,10 +202,11 @@ may be useful to anyone looking to get started with `cueball`:
 
 ### `Resolver` trait implementer
 
-* [`cueball-static-resolver`](https://github.com/joyent/rust-cueball-static-resolver)
+* [`cueball-static-resolver`](https://github.com/joyent/rust-cueball/resolvers/static-resolver)
+* [`cueball-static-resolver`](https://github.com/joyent/rust-cueball/resolvers/manatee-primary-resolver)
 * [`cueball-dns-resolver`](https://github.com/joyent/rust-cueball-dns-resolver)
 
 ### `Connection` trait implementer
 
-* [`cueball-tcp-stream-connection`](https://github.com/joyent/rust-cueball-tcp-stream-connection)
-* [`cueball-postgres-connection`](https://github.com/joyent/rust-cueball-postgres-connection)
+* [`cueball-tcp-stream-connection`](https://github.com/joyent/rust-cueball/connections/tcp-stream-connection)
+* [`cueball-postgres-connection`](https://github.com/joyent/rust-cueball/connections/postgres-connection)

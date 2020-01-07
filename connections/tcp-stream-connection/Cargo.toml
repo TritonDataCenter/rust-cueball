@@ -2,6 +2,13 @@
 name = "cueball-tcp-stream-connection"
 version = "0.3.0"
 authors = ["Kelly McLaughlin <kelly.mclaughlin@joyent.com>"]
+description = """
+This is an implementation of the cueball Connection trait for TcpStream from the rust standard library.
+"""
+repository = "https://github.com/joyent/rust-cueball"
+keywords = ["pool","joyent"]
+readme = "../../README.md"
+license = "MPL-2.0"
 edition = "2018"
 
 [dependencies]

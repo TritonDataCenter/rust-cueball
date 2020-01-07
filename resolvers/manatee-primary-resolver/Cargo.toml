@@ -2,6 +2,14 @@
 name = "cueball-manatee-primary-resolver"
 version = "0.3.0"
 authors = ["Kelly McLaughlin <kelly.mclaughlin@joyent.com>", "Isaac Davis <isaac.davis@joyent.com>"]
+description = """
+An implementation of the cueball Resolver trait that is specific to the Joyent manatee project. It queries a zookeeper 
+cluster to determine the PostgreSQL replication primary from a set of PostgreSQL replication peers.
+"""
+repository = "https://github.com/joyent/rust-cueball"
+keywords = ["pool","joyent"]
+readme = "../../README.md"
+license = "MPL-2.0"
 edition = "2018"
 
 [dependencies]

@@ -834,9 +834,8 @@ mod test {
     use std::sync::mpsc::{channel, TryRecvError};
     use std::vec::Vec;
 
-    use clap::{crate_name, crate_version};
+    use clap::crate_version;
     use quickcheck::{quickcheck, Arbitrary, Gen};
-    use slog::LevelFilter;
 
     use super::util;
 
@@ -873,12 +872,10 @@ mod test {
     // Below: test process_value()
 
     fn test_log() -> Logger {
+        let plain = slog_term::PlainSyncDecorator::new(std::io::stdout());
         Logger::root(
-            Mutex::new(LevelFilter::new(
-                slog_bunyan::with_name(crate_name!(),
-                    std::io::stdout()).build(),
-                slog::Level::Trace)).fuse(),
-                o!("build-id" => crate_version!()))
+            Mutex::new(slog_term::FullFormat::new(plain).build()).fuse(),
+            o!("build-id" => crate_version!()))
     }
 
     #[derive(Clone)]

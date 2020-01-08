@@ -15,6 +15,6 @@ edition = "2018"
 cueball = { path = '../../cueball', version = '0.3.0' }
 
 [dev-dependencies]
-cueball-tcp-stream-connection = { path = '../../connections/tcp-stream-connection' }
+cueball-tcp-stream-connection = { path = '../../connections/tcp-stream-connection', version = '0.3.0' }
 slog = "2.4.1"
 slog-term = "2.4.0"

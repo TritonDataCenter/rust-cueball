@@ -6,6 +6,13 @@ authors = [
         "Jon Anderson <jon.anderson@joyent.com>",
         "Isaac Davis <isaac.davis@joyent.com>"
 ]
+description = """
+A connection pool to manage connections to a multi-node service.
+"""
+repository = "https://github.com/joyent/rust-cueball"
+keywords = ["pool","joyent"]
+readme = "../README.md"
+license = "MPL-2.0"
 edition = "2018"
 
 [dependencies]

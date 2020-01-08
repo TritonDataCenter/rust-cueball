@@ -12,7 +12,7 @@ license = "MPL-2.0"
 edition = "2018"
 
 [dependencies]
-cueball = { path = '../../cueball' }
+cueball = { path = '../../cueball', version = '0.3.0' }
 
 [dev-dependencies]
 cueball-tcp-stream-connection = { path = '../../connections/tcp-stream-connection' }

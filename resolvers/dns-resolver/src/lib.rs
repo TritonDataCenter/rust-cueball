@@ -85,7 +85,7 @@ impl Resolver for DnsResolver {
             domain: self.domain.clone(),
             last_srv_ttl: None,
             next_service: None,
-            srv_retry_params: srv_retry_params,
+            srv_retry_params,
             dns_client: None,
             defport: Some(80),
             pool_tx: s,
@@ -230,11 +230,11 @@ impl PollResolverFSM for ResolverFSM {
                         debug!(context.log, "srv_response: {:?}", srv_resp);
                         if srv_resp.response_code() == ResponseCode::NoError {
                             for srv in srv_resp.answers() {
-                                if let &RData::SRV(ref s_rec) = srv.rdata() {
+                                if let RData::SRV(ref s_rec) = *srv.rdata() {
                                     let ttl = srv.ttl();
                                     let now: DateTime<Utc> = Utc::now();
                                     let next: i64 =
-                                        now.timestamp() + (1000 * ttl) as i64;
+                                        now.timestamp() + i64::from(1000 * ttl);
                                     let next_service =
                                         NaiveDateTime::from_timestamp(next, 0);
                                     context.last_srv_ttl = Some(ttl);
@@ -246,7 +246,7 @@ impl PollResolverFSM for ResolverFSM {
                                         .unwrap();
                                     let lookup_name = SrvRec {
                                         name: s_rec.target().to_string(),
-                                        port: port,
+                                        port,
                                         addresses_v4: Vec::new(),
                                         expiry_v4: Some(next_service),
                                     };
@@ -264,7 +264,7 @@ impl PollResolverFSM for ResolverFSM {
                         {
                             let now: DateTime<Utc> = Utc::now();
                             let next: i64 =
-                                now.timestamp() + (1000 * 60 * 60) as i64;
+                                now.timestamp() + i64::from(1000 * 60 * 60);
                             let next_service =
                                 NaiveDateTime::from_timestamp(next, 0);
 
@@ -379,7 +379,7 @@ impl PollResolverFSM for ResolverFSM {
                         debug!(context.log, "a resp: {:?}", a_resp);
                         if a_resp.response_code() == ResponseCode::NoError {
                             for a in a_resp.answers() {
-                                if let &RData::A(ref ip) = a.rdata() {
+                                if let RData::A(ref ip) = *a.rdata() {
                                     let _ttl = a.ttl();
                                     match ip.to_string().parse::<IpAddr>() {
                                         Ok(addr) => {
@@ -488,7 +488,7 @@ fn init_dns_client(resolver: &str) -> Option<SyncClient<UdpClientConnection>> {
     match resolver.to_string().parse() {
         Ok(server) => {
             match UdpClientConnection::new(server) {
-                Ok(conn) => return Some(SyncClient::new(conn)),
+                Ok(conn) => Some(SyncClient::new(conn)),
                 Err(e) => {
                     panic!("couldn't start a new DNS client connection: {}", e)
                 }
@@ -496,6 +496,7 @@ fn init_dns_client(resolver: &str) -> Option<SyncClient<UdpClientConnection>> {
         }
         Err(e) => panic!("could not parse resolver ip: {}", e),
     };
+    None
 }
 
 fn configure_default_resolvers(context: &mut ResolverContext) {
@@ -514,19 +515,19 @@ fn configure_from_resolv_conf(context: &mut ResolverContext) -> bool {
                         let res = format!("{}:{}", ns.to_string(), 53);
                         context.resolvers.push(res);
                     }
+                    true
                 }
                 Err(e) => {
                     println!("Parse /etc/resolv.conf: {}", e);
-                    return false;
+                    false
                 }
             }
-            return true;
         }
         Err(e) => {
             println!("Could not open resolve.conf: {}", e);
-            return false;
+            false
         }
-    };
+    }
 }
 
 fn send_updates(

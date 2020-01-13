@@ -22,6 +22,6 @@ tokio-postgres-native-tls = "0.1.0-rc.1"
 unicode-normalization = "=0.1.5"
 
 [dev-dependencies]
-cueball-static-resolver = { path = "../../resolvers/static-resolver" }
+cueball-static-resolver = { path = "../../resolvers/static-resolver", version = "0.3.0" }
 slog = "2.4.1"
 slog-term = "2.4.0"

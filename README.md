@@ -204,7 +204,7 @@ may be useful to anyone looking to get started with `cueball`:
 
 * [`cueball-static-resolver`](https://github.com/joyent/rust-cueball/tree/master/resolvers/static-resolver)
 * [`cueball-static-resolver`](https://github.com/joyent/rust-cueball/tree/master/resolvers/manatee-primary-resolver)
-* [`cueball-dns-resolver`](https://github.com/joyent/rust-cueball-dns-resolver)
+* [`cueball-dns-resolver`](https://github.com/joyent/rust-cueball/tree/master/resolvers/dns-resolver)
 
 ### `Connection` trait implementer
 

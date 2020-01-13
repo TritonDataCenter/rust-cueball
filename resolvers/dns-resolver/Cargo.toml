@@ -1,7 +1,14 @@
 [package]
 name = "cueball-dns-resolver"
-version = "0.0.2"
+version = "0.3.0"
 authors = ["Jon Anderson <jon.anderson@joyent.com>"]
+description = """
+This is a rust implementation of a resolver or Joyent's DNS resolver.
+"""
+repository = "https://github.com/joyent/rust-cueball"
+keywords = ["pool","joyent"]
+readme = "../../README.md"
+license = "MPL-2.0"
 edition = "2018"
 
 [dependencies]

@@ -492,11 +492,10 @@ fn init_dns_client(resolver: &str) -> Option<SyncClient<UdpClientConnection>> {
                 Err(e) => {
                     panic!("couldn't start a new DNS client connection: {}", e)
                 }
-            };
+            }
         }
         Err(e) => panic!("could not parse resolver ip: {}", e),
-    };
-    None
+    }
 }
 
 fn configure_default_resolvers(context: &mut ResolverContext) {

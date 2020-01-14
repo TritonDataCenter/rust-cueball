@@ -2,6 +2,7 @@
 members = [
     "resolvers/manatee-primary-resolver",
     "resolvers/static-resolver",
+    "resolvers/dns-resolver",
     "connections/postgres-connection",
     "connections/tcp-stream-connection",
     "cueball",

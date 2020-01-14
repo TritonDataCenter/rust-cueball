@@ -3,7 +3,7 @@ name = "cueball-dns-resolver"
 version = "0.3.0"
 authors = ["Jon Anderson <jon.anderson@joyent.com>"]
 description = """
-This is a rust implementation of a resolver or Joyent's DNS resolver.
+This is a rust implementation of Joyent's node-cueball DNS resolver.
 """
 repository = "https://github.com/joyent/rust-cueball"
 keywords = ["pool","joyent"]

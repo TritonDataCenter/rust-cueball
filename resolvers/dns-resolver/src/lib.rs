@@ -1,4 +1,4 @@
-// Copyright 2019 Joyent, Inc.
+// Copyright 2020 Joyent, Inc.
 
 //! resolver is a library for resolving DNS records for cueball.
 use std::collections::HashMap;

@@ -1,4 +1,4 @@
-// Copyright 2019 Joyent, Inc.
+// Copyright 2020 Joyent, Inc.
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::mpsc::Sender;
@@ -117,7 +117,7 @@ fn main() {
     let pool_opts = ConnectionPoolOptions {
         max_connections: Some(3),
         claim_timeout: Some(1000),
-        log: Some(log),
+        log: Some(log.clone()),
         rebalancer_action_delay: None,
         decoherence_interval: None,
         connection_check_interval: None,
@@ -181,4 +181,6 @@ fn main() {
 
     let m_claim3 = pool.try_claim();
     assert!(m_claim3.is_some());
+
+    loop {}
 }

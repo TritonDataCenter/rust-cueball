@@ -1,10 +1,12 @@
-// Copyright 2019 Joyent, Inc.
+// Copyright 2020 Joyent, Inc.
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::mpsc::Sender;
-use std::sync::{Arc, Barrier};
+use std::sync::{Arc, Barrier, Mutex};
 use std::time::Duration;
 use std::{thread, time};
+
+use slog::{o, Drain, Logger};
 
 use cueball::backend;
 use cueball::backend::{Backend, BackendAddress, BackendPort};
@@ -192,10 +194,16 @@ fn connection_pool_stop() {
 
     let resolver = FakeResolver::new(vec![be1]);
 
+    let plain = slog_term::PlainSyncDecorator::new(std::io::stdout());
+    let log = Logger::root(
+        Mutex::new(slog_term::FullFormat::new(plain).build()).fuse(),
+        o!("build-id" => "0.1.0"),
+    );
+
     let pool_opts = ConnectionPoolOptions {
         max_connections: Some(3),
         claim_timeout: Some(1000),
-        log: None,
+        log: Some(log),
         rebalancer_action_delay: None,
         decoherence_interval: None,
         connection_check_interval: None,

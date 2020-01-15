@@ -4,7 +4,7 @@ Known issues:
 
 - [joyent/rust-cueball#24] Rebalance with no backends can cause a crash
 
-## not yet released
+## 0.3.1
 
 - [joyent/rust-cueball#33] connection_pool lacks a Drop instance
 - Fixed some typos in the README

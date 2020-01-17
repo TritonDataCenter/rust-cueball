@@ -23,28 +23,53 @@
 use std::convert::From;
 use std::fmt::Debug;
 use std::net::{AddrParseError, SocketAddr};
-use std::str::{FromStr};
+use std::str::FromStr;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use clap::{crate_name, crate_version};
 use failure::Error as FailureError;
 use futures::future::{ok, loop_fn, Either, Future, Loop};
 use itertools::Itertools;
 use serde::Deserialize;
 use serde_json;
 use serde_json::Value as SerdeJsonValue;
-use slog::{error, info, debug, o, Drain, Key, Logger, Record, Serializer};
+use slog::{
+    error,
+    info,
+    debug,
+    o,
+    Drain,
+    Key,
+    LevelFilter,
+    Logger,
+    Record,
+    Serializer
+};
 use slog::Result as SlogResult;
 use slog::Value as SlogValue;
-use tokio_zookeeper::*;
+use tokio_zookeeper::{
+    KeeperState,
+    WatchedEvent,
+    WatchedEventType,
+    ZooKeeper,
+    ZooKeeperBuilder
+};
 use tokio::prelude::*;
 use tokio::runtime::Runtime;
 use tokio::timer::Delay;
+use tokio::timer::timeout::Error as TimeoutError;
 use url::Url;
 
-use cueball::backend::*;
+use cueball::backend::{
+    self,
+    BackendAddress,
+    BackendKey,
+    Backend,
+};
 use cueball::resolver::{
     BackendAddedMsg,
     BackendRemovedMsg,
@@ -52,25 +77,38 @@ use cueball::resolver::{
     Resolver
 };
 
-pub mod util;
+pub mod common;
 
 //
 // The interval at which the resolver should send heartbeats via the
-// connection pool channel.
+// connection pool channel. Public for use in tests.
 //
-const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
+pub const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
 
 //
-// Delays to be used when reconnecting to the zookeeper client
+// Timeout for zookeeper sessions. Public for use in tests.
 //
-const RECONNECT_DELAY: Duration = Duration::from_secs(10);
-const RECONNECT_NODELAY: Duration = Duration::from_secs(0);
+pub const SESSION_TIMEOUT: Duration = Duration::from_secs(5);
 
 //
-// Delays to be used when re-setting the watch on the zookeeper node
+// Timeout for the initial tcp connect operation to zookeeper. Public for use in
+// tests.
 //
-const WATCH_LOOP_DELAY: Duration = Duration::from_secs(10);
-const WATCH_LOOP_NODELAY: Duration = Duration::from_secs(0);
+pub const TCP_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+
+//
+// Delays to be used when reconnecting to the zookeeper client. Public for use
+// in tests.
+//
+pub const RECONNECT_DELAY: Duration = Duration::from_secs(10);
+pub const RECONNECT_NODELAY: Duration = Duration::from_secs(0);
+
+//
+// Delays to be used when re-setting the watch on the zookeeper node. Public for
+// use in tests.
+//
+pub const WATCH_LOOP_DELAY: Duration = Duration::from_secs(10);
+pub const WATCH_LOOP_NODELAY: Duration = Duration::from_secs(0);
 
 //
 // An error type to be used internally.
@@ -223,7 +261,7 @@ pub struct ManateePrimaryResolver {
     /// call to run(), and false otherwise), but could be useful if the caller
     /// wants to check if the resolver is running for some reason.
     ///
-    is_running: bool,
+    pub is_running: bool,
     ///
     /// The ManateePrimaryResolver's root log
     ///
@@ -253,8 +291,13 @@ impl ManateePrimaryResolver {
         // Add the log_values to the passed-in logger, or create a new logger if
         // the caller did not pass one in
         //
-        let log = log.unwrap_or_else(||
-            Logger::root(slog_stdlog::StdLog.fuse(), o!()));
+        let log = log.unwrap_or_else(|| {
+            Logger::root(Mutex::new(LevelFilter::new(
+                slog_bunyan::with_name(crate_name!(),
+                    std::io::stdout()).build(),
+                slog::Level::Info)).fuse(),
+                o!("build-id" => crate_version!()))
+        });
 
         ManateePrimaryResolver {
             connect_string: connect_string.clone(),
@@ -266,6 +309,30 @@ impl ManateePrimaryResolver {
     }
 }
 
+//
+// Returns a mock event that can be used to bootstrap the watch loop. We use
+// a NodeDataChanged event because the watch loop's response to this type of
+// event is to get the data from the node being watched, which is also what
+// we want to do when we start the watch loop anew.
+//
+fn mock_event() -> WatchedEvent {
+    WatchedEvent {
+        event_type: WatchedEventType::NodeDataChanged,
+        //
+        // This artificial keeper_state doesn't necessarily reflect reality, but
+        // that's ok because it's paired with an artificial NodeDataChanged
+        // event, and our handling for this type of event doesn't involve the
+        // keeper_state field.
+        //
+        keeper_state: KeeperState::SyncConnected,
+        //
+        // We never use `path`, so we might as well set it to an
+        // empty string in our artificially constructed WatchedEvent
+        // object.
+        //
+        path: "".to_string(),
+    }
+}
 ///
 /// Parses the given zookeeper node data into a Backend object, compares it to
 /// the last Backend sent to the cueball connection pool, and sends it to the
@@ -361,7 +428,7 @@ fn process_value(
 
     // Construct a backend and key
     let backend = Backend::new(&ip, port);
-    let backend_key = srv_key(&backend);
+    let backend_key = backend::srv_key(&backend);
 
     // Determine whether we need to send the new backend over
     let mut last_backend = last_backend.lock().unwrap();
@@ -534,13 +601,14 @@ fn watch_loop(
                 },
                 WatchedEventType::NodeDeleted => {
                     //
-                    // Same behavior as the above case where we didn't get the
-                    // data because the node doesn't exist. See comment above.
+                    // The node doesn't exist, but we can't use the existing
+                    // event, or we'll just loop on this case forever. We use
+                    // the mock event instead.
                     //
                     info!(log, "ZK node deleted");
                     return Either::A(ok(Loop::Continue(WatchLoopState {
                         watcher,
-                        curr_event,
+                        curr_event: mock_event(),
                         delay: WATCH_LOOP_DELAY
                     })));
                 },
@@ -565,7 +633,7 @@ fn watch_loop(
                             Loop::Continue(WatchLoopState {
                                 watcher,
                                 curr_event: event,
-                                delay:WATCH_LOOP_NODELAY
+                                delay: WATCH_LOOP_NODELAY
                             })
                         },
                         //
@@ -617,16 +685,25 @@ fn connect_loop(
     Error = ()> + Send {
 
     let oe_log = log.clone();
+
     Delay::new(Instant::now() + delay)
     .and_then(move |_| {
         info!(log, "Connecting to ZooKeeper cluster");
+
+        let mut builder = ZooKeeperBuilder::default();
+        builder.set_timeout(SESSION_TIMEOUT);
+        builder.set_logger(log.new(o!(
+            "component" => "zookeeper"
+        )));
+
         //
         // We expect() the result of get_addr_at() because we anticipate the
         // connect string having at least one element, and we can't do anything
         // useful if it doesn't.
         //
-        ZooKeeper::connect(connect_string.get_addr_at(0)
-        .expect("connect_string should have at least one IP address"))
+        builder.connect(connect_string.get_addr_at(0)
+            .expect("connect_string should have at least one IP address"))
+        .timeout(TCP_CONNECT_TIMEOUT)
         .and_then(move |(zk, default_watcher)| {
             info!(log, "Connected to ZooKeeper cluster");
 
@@ -646,23 +723,7 @@ fn connect_loop(
             //
             loop_fn(WatchLoopState {
                 watcher: Box::new(default_watcher),
-                curr_event: WatchedEvent {
-                    event_type: WatchedEventType::NodeDataChanged,
-                    //
-                    // This initial artificial keeper_state doesn't necessarily
-                    // reflect reality, but that's ok because it's paired with
-                    // an artificial NodeDataChanged event, and our handling for
-                    // this type of event doesn't involve the keeper_state
-                    // field.
-                    //
-                    keeper_state: KeeperState::SyncConnected,
-                    //
-                    // We never use `path`, so we might as well set it to an
-                    // empty string in our artificially constructed WatchedEvent
-                    // object.
-                    //
-                    path: "".to_string(),
-                },
+                curr_event: mock_event(),
                 delay: WATCH_LOOP_NODELAY
             } , move |loop_state| {
                 //
@@ -684,6 +745,7 @@ fn connect_loop(
                     loop_state,
                     log
                 )
+                .map_err(TimeoutError::inner)
             })
             .and_then(|next_action| {
                 ok(match next_action {
@@ -703,6 +765,7 @@ fn connect_loop(
         .or_else(move |error| {
             error!(oe_log, "Error connecting to ZooKeeper cluster";
                 "error" => LogItem(error));
+
             ok(Loop::Continue(RECONNECT_DELAY))
         })
     })
@@ -761,6 +824,9 @@ impl Resolver for ManateePrimaryResolver {
         let log = self.log.clone();
         let at_log = self.log.clone();
 
+        let exited = Arc::new(AtomicBool::new(false));
+        let exited_clone = Arc::clone(&exited);
+
         //
         // Start the event-processing task. This is structured as two nested
         // loops: one to handle the zookeeper connection and one to handle
@@ -780,7 +846,7 @@ impl Resolver for ManateePrimaryResolver {
             //     connecting.
             // Loop::Break type: ()
             //
-            loop_fn(Duration::from_secs(0), move |delay| {
+            loop_fn(RECONNECT_NODELAY, move |delay| {
                 let pool_tx = pool_tx.clone();
                 let last_backend = Arc::clone(&last_backend);
                 let connect_string = connect_string.clone();
@@ -797,24 +863,39 @@ impl Resolver for ManateePrimaryResolver {
                 )
             }).and_then(move |_| {
                 info!(at_log, "Event-processing task stopping");
+                exited_clone.store(true, Ordering::Relaxed);
                 Ok(())
             })
             .map(|_| ())
+            .map_err(|_| {
+                unreachable!("connect_loop() should never return an error")
+            })
         );
+
+        //
+        // Heartbeat-sending loop. If we break from this loop, the resolver
+        // exits.
+        //
         loop {
+            if exited.load(Ordering::Relaxed) {
+                info!(self.log,
+                    "event-processing task exited; stopping heartbeats");
+                break;
+            }
             if s.send(BackendMsg::HeartbeatMsg).is_err() {
                 info!(self.log, "Connection pool channel closed");
                 break;
             }
             thread::sleep(HEARTBEAT_INTERVAL);
         }
-        info!(self.log, "Stopping runtime");
+
         //
         // We shut down the background watch-looping thread. It may have already
         // exited by itself if it noticed that the connection pool closed its
         // channel, but there's no harm still calling shutdown_now() in that
         // case.
         //
+        info!(self.log, "Stopping runtime");
         rt.shutdown_now().wait().unwrap();
         info!(self.log, "Runtime stopped successfully");
         self.is_running = false;
@@ -825,6 +906,11 @@ impl Resolver for ManateePrimaryResolver {
 //
 // Unit tests
 //
+// The "." path attribute below is so paths within the `test` submodule will be
+// relative to "src" rather than "src/test", which does not exist. This allows
+// us to import the "../tests/test_data.rs" module here.
+//
+#[path = "."]
 #[cfg(test)]
 mod test {
     use super::*;
@@ -834,10 +920,9 @@ mod test {
     use std::sync::mpsc::{channel, TryRecvError};
     use std::vec::Vec;
 
-    use clap::crate_version;
     use quickcheck::{quickcheck, Arbitrary, Gen};
 
-    use super::util;
+    use common::{util, test_data};
 
     impl Arbitrary for ZkConnectString {
         fn arbitrary<G: Gen>(g: &mut G) -> Self {
@@ -871,323 +956,6 @@ mod test {
 
     // Below: test process_value()
 
-    fn test_log() -> Logger {
-        let plain = slog_term::PlainSyncDecorator::new(std::io::stdout());
-        Logger::root(
-            Mutex::new(slog_term::FullFormat::new(plain).build()).fuse(),
-            o!("build-id" => crate_version!()))
-    }
-
-    #[derive(Clone)]
-    struct BackendData {
-        raw: Vec<u8>,
-        object: Backend
-    }
-
-    impl BackendData {
-        //
-        // Most of the data here isn't relevant, but real json from zookeeper
-        // will include it, so we include it here.
-        //
-        fn new(ip: &str, port: u16) -> Self {
-            let raw = format!(r#" {{
-                "generation": 1,
-                "primary": {{
-                    "id": "{ip}:{port}:12345",
-                    "ip": "{ip}",
-                    "pgUrl": "tcp://postgres@{ip}:{port}/postgres",
-                    "zoneId": "f47c4766-1857-4bdc-97f0-c1fd009c955b",
-                    "backupUrl": "http://{ip}:12345"
-                }},
-                "sync": {{
-                    "id": "10.77.77.21:5432:12345",
-                    "zoneId": "f8727df9-c639-4152-a861-c77a878ca387",
-                    "ip": "10.77.77.21",
-                    "pgUrl": "tcp://postgres@10.77.77.21:5432/postgres",
-                    "backupUrl": "http://10.77.77.21:12345"
-                }},
-                "async": [],
-                "deposed": [
-                    {{
-                        "id":"10.77.77.22:5432:12345",
-                        "ip": "10.77.77.22",
-                        "pgUrl": "tcp://postgres@10.77.77.22:5432/postgres",
-                        "zoneId": "c7a64f9f-4d49-4e6b-831a-68fd6ebf1d3c",
-                        "backupUrl": "http://10.77.77.22:12345"
-                    }}
-                ],
-                "initWal": "0/16522D8"
-            }}"#, ip = ip, port = port).as_bytes().to_vec();
-
-            BackendData {
-                raw,
-                object: Backend::new(&BackendAddress::from_str(ip).unwrap(),
-                    port)
-            }
-        }
-
-        fn raw(&self) -> Vec<u8> {
-            self.raw.clone()
-        }
-
-        fn key(&self) -> BackendKey {
-            srv_key(&self.object)
-        }
-
-        fn added_msg(&self) -> BackendAddedMsg {
-            BackendAddedMsg {
-                key: self.key(),
-                backend: self.object.clone()
-            }
-        }
-
-        fn removed_msg(&self) -> BackendRemovedMsg {
-            BackendRemovedMsg(self.key())
-        }
-    }
-
-    fn backend_ip1_port1() -> BackendData {
-        BackendData::new("10.77.77.28", 5432)
-    }
-
-    fn backend_ip1_port2() -> BackendData {
-        BackendData::new("10.77.77.28", 5431)
-    }
-
-    fn backend_ip2_port1() -> BackendData {
-        BackendData::new("10.77.77.21", 5432)
-    }
-
-    fn backend_ip2_port2() -> BackendData {
-        BackendData::new("10.77.77.21", 5431)
-    }
-
-    fn raw_invalid_json() -> Vec<u8> {
-        "foo".as_bytes().to_vec()
-    }
-
-    fn raw_no_ip() -> Vec<u8> {
-        r#" {
-                "generation": 1,
-                "primary": {
-                    "id": "10.77.77.21:5432:12345",
-                    "zoneId": "f8727df9-c639-4152-a861-c77a878ca387",
-                    "pgUrl": "tcp://postgres@10.77.77.21:5432/postgres",
-                    "backupUrl": "http://10.77.77.21:12345"
-                },
-                "sync": {
-                    "id": "10.77.77.28:5432:12345",
-                    "ip": "10.77.77.28",
-                    "pgUrl": "tcp://postgres@10.77.77.28:5432/postgres",
-                    "zoneId": "f47c4766-1857-4bdc-97f0-c1fd009c955b",
-                    "backupUrl": "http://10.77.77.28:12345"
-                },
-                "async": [],
-                "deposed": [
-                    {
-                        "id":"10.77.77.22:5432:12345",
-                        "ip": "10.77.77.22",
-                        "pgUrl": "tcp://postgres@10.77.77.22:5432/postgres",
-                        "zoneId": "c7a64f9f-4d49-4e6b-831a-68fd6ebf1d3c",
-                        "backupUrl": "http://10.77.77.22:12345"
-                    }
-                ],
-                "initWal": "0/16522D8"
-            }
-        "#.as_bytes().to_vec()
-    }
-
-    fn raw_invalid_ip() -> Vec<u8> {
-        r#" {
-                "generation": 1,
-                "primary": {
-                    "id": "10.77.77.21:5432:12345",
-                    "zoneId": "f8727df9-c639-4152-a861-c77a878ca387",
-                    "ip": "foo",
-                    "pgUrl": "tcp://postgres@10.77.77.21:5432/postgres",
-                    "backupUrl": "http://10.77.77.21:12345"
-                },
-                "sync": {
-                    "id": "10.77.77.28:5432:12345",
-                    "ip": "10.77.77.28",
-                    "pgUrl": "tcp://postgres@10.77.77.28:5432/postgres",
-                    "zoneId": "f47c4766-1857-4bdc-97f0-c1fd009c955b",
-                    "backupUrl": "http://10.77.77.28:12345"
-                },
-                "async": [],
-                "deposed": [
-                    {
-                        "id":"10.77.77.22:5432:12345",
-                        "ip": "10.77.77.22",
-                        "pgUrl": "tcp://postgres@10.77.77.22:5432/postgres",
-                        "zoneId": "c7a64f9f-4d49-4e6b-831a-68fd6ebf1d3c",
-                        "backupUrl": "http://10.77.77.22:12345"
-                    }
-                ],
-                "initWal": "0/16522D8"
-            }
-        "#.as_bytes().to_vec()
-    }
-
-    fn raw_wrong_type_ip() -> Vec<u8> {
-        r#" {
-                "generation": 1,
-                "primary": {
-                    "id": "10.77.77.21:5432:12345",
-                    "zoneId": "f8727df9-c639-4152-a861-c77a878ca387",
-                    "ip": true,
-                    "pgUrl": "tcp://postgres@10.77.77.21:5432/postgres",
-                    "backupUrl": "http://10.77.77.21:12345"
-                },
-                "sync": {
-                    "id": "10.77.77.28:5432:12345",
-                    "ip": "10.77.77.28",
-                    "pgUrl": "tcp://postgres@10.77.77.28:5432/postgres",
-                    "zoneId": "f47c4766-1857-4bdc-97f0-c1fd009c955b",
-                    "backupUrl": "http://10.77.77.28:12345"
-                },
-                "async": [],
-                "deposed": [
-                    {
-                        "id":"10.77.77.22:5432:12345",
-                        "ip": "10.77.77.22",
-                        "pgUrl": "tcp://postgres@10.77.77.22:5432/postgres",
-                        "zoneId": "c7a64f9f-4d49-4e6b-831a-68fd6ebf1d3c",
-                        "backupUrl": "http://10.77.77.22:12345"
-                    }
-                ],
-                "initWal": "0/16522D8"
-            }
-        "#.as_bytes().to_vec()
-    }
-
-    fn raw_no_pg_url() -> Vec<u8> {
-        r#" {
-                "generation": 1,
-                "primary": {
-                    "id": "10.77.77.28:5432:12345",
-                    "ip": "10.77.77.28",
-                    "zoneId": "f47c4766-1857-4bdc-97f0-c1fd009c955b",
-                    "backupUrl": "http://10.77.77.28:12345"
-                },
-                "sync": {
-                    "id": "10.77.77.21:5432:12345",
-                    "zoneId": "f8727df9-c639-4152-a861-c77a878ca387",
-                    "ip": "10.77.77.21",
-                    "pgUrl": "tcp://postgres@10.77.77.21:5432/postgres",
-                    "backupUrl": "http://10.77.77.21:12345"
-                },
-                "async": [],
-                "deposed": [
-                    {
-                        "id":"10.77.77.22:5432:12345",
-                        "ip": "10.77.77.22",
-                        "pgUrl": "tcp://postgres@10.77.77.22:5432/postgres",
-                        "zoneId": "c7a64f9f-4d49-4e6b-831a-68fd6ebf1d3c",
-                        "backupUrl": "http://10.77.77.22:12345"
-                    }
-                ],
-                "initWal": "0/16522D8"
-            }
-        "#.as_bytes().to_vec()
-    }
-
-    fn raw_invalid_pg_url() -> Vec<u8> {
-        r#" {
-                "generation": 1,
-                "primary": {
-                    "id": "10.77.77.28:5432:12345",
-                    "ip": "10.77.77.28",
-                    "pgUrl": "foo",
-                    "zoneId": "f47c4766-1857-4bdc-97f0-c1fd009c955b",
-                    "backupUrl": "http://10.77.77.28:12345"
-                },
-                "sync": {
-                    "id": "10.77.77.21:5432:12345",
-                    "zoneId": "f8727df9-c639-4152-a861-c77a878ca387",
-                    "ip": "10.77.77.21",
-                    "pgUrl": "tcp://postgres@10.77.77.21:5432/postgres",
-                    "backupUrl": "http://10.77.77.21:12345"
-                },
-                "async": [],
-                "deposed": [
-                    {
-                        "id":"10.77.77.22:5432:12345",
-                        "ip": "10.77.77.22",
-                        "pgUrl": "tcp://postgres@10.77.77.22:5432/postgres",
-                        "zoneId": "c7a64f9f-4d49-4e6b-831a-68fd6ebf1d3c",
-                        "backupUrl": "http://10.77.77.22:12345"
-                    }
-                ],
-                "initWal": "0/16522D8"
-            }
-        "#.as_bytes().to_vec()
-    }
-
-    fn raw_wrong_type_pg_url() -> Vec<u8> {
-        r#" {
-                "generation": 1,
-                "primary": {
-                    "id": "10.77.77.28:5432:12345",
-                    "ip": "10.77.77.28",
-                    "pgUrl": true,
-                    "zoneId": "f47c4766-1857-4bdc-97f0-c1fd009c955b",
-                    "backupUrl": "http://10.77.77.28:12345"
-                },
-                "sync": {
-                    "id": "10.77.77.21:5432:12345",
-                    "zoneId": "f8727df9-c639-4152-a861-c77a878ca387",
-                    "ip": "10.77.77.21",
-                    "pgUrl": "tcp://postgres@10.77.77.21:5432/postgres",
-                    "backupUrl": "http://10.77.77.21:12345"
-                },
-                "async": [],
-                "deposed": [
-                    {
-                        "id":"10.77.77.22:5432:12345",
-                        "ip": "10.77.77.22",
-                        "pgUrl": "tcp://postgres@10.77.77.22:5432/postgres",
-                        "zoneId": "c7a64f9f-4d49-4e6b-831a-68fd6ebf1d3c",
-                        "backupUrl": "http://10.77.77.22:12345"
-                    }
-                ],
-                "initWal": "0/16522D8"
-            }
-        "#.as_bytes().to_vec()
-    }
-
-    fn raw_no_port_pg_url() -> Vec<u8> {
-        r#" {
-                "generation": 1,
-                "primary": {
-                    "id": "10.77.77.28:5432:12345",
-                    "ip": "10.77.77.28",
-                    "pgUrl": "tcp://postgres@10.77.77.22/postgres",
-                    "zoneId": "f47c4766-1857-4bdc-97f0-c1fd009c955b",
-                    "backupUrl": "http://10.77.77.28:12345"
-                },
-                "sync": {
-                    "id": "10.77.77.21:5432:12345",
-                    "zoneId": "f8727df9-c639-4152-a861-c77a878ca387",
-                    "ip": "10.77.77.21",
-                    "pgUrl": "tcp://postgres@10.77.77.21:5432/postgres",
-                    "backupUrl": "http://10.77.77.21:12345"
-                },
-                "async": [],
-                "deposed": [
-                    {
-                        "id":"10.77.77.22:5432:12345",
-                        "ip": "10.77.77.22",
-                        "pgUrl": "tcp://postgres@10.77.77.22:5432/postgres",
-                        "zoneId": "c7a64f9f-4d49-4e6b-831a-68fd6ebf1d3c",
-                        "backupUrl": "http://10.77.77.22:12345"
-                    }
-                ],
-                "initWal": "0/16522D8"
-            }
-        "#.as_bytes().to_vec()
-    }
-
     //
     // Represents a process_value test case, including inputs and expected
     // outputs.
@@ -1196,7 +964,6 @@ mod test {
         value: Vec<u8>,
         last_backend: BackendKey,
         expected_error: Option<ResolverError>,
-        message_count: u32,
         added_backend: Option<BackendAddedMsg>,
         removed_backend: Option<BackendRemovedMsg>
     }
@@ -1212,7 +979,7 @@ mod test {
             &tx.clone(),
             &input.value,
             last_backend,
-            test_log());
+            util::log_from_env(util::DEFAULT_LOG_LEVEL).unwrap());
         match input.expected_error {
             None => assert_eq!(result, Ok(())),
             Some(expected_error) => {
@@ -1222,8 +989,19 @@ mod test {
 
         let mut received_messages = Vec::new();
 
+        let expected_message_count = {
+            let mut acc = 0;
+            if input.added_backend.is_some() {
+                acc += 1;
+            }
+            if input.removed_backend.is_some() {
+                acc += 1;
+            }
+            acc
+        };
+
         // Receive as many messages as we expect
-        for i in 0..input.message_count {
+        for i in 0..expected_message_count {
             let channel_result = rx.try_recv();
             match channel_result {
                 Err(e) => panic!("Unexpected error receiving on channel: {:?} \
@@ -1270,175 +1048,163 @@ mod test {
     }
 
     #[test]
-    fn port_ip_change_test() {
-        let data_1 = backend_ip1_port1();
-        let data_2 = backend_ip2_port2();
+    fn process_value_test_port_ip_change() {
+        let data_1 = test_data::backend_ip1_port1();
+        let data_2 = test_data::backend_ip2_port2();
 
         run_process_value_fields(ProcessValueFields{
-            value: data_2.raw(),
+            value: data_2.raw_vec(),
             last_backend: data_1.key(),
             expected_error: None,
-            message_count: 2,
             added_backend: Some(data_2.added_msg()),
             removed_backend: Some(data_1.removed_msg())
         });
     }
 
     #[test]
-    fn port_change_test() {
-        let data_1 = backend_ip1_port1();
-        let data_2 = backend_ip2_port1();
+    fn process_value_test_port_change() {
+        let data_1 = test_data::backend_ip1_port1();
+        let data_2 = test_data::backend_ip2_port1();
 
         run_process_value_fields(ProcessValueFields{
-            value: data_2.raw(),
+            value: data_2.raw_vec(),
             last_backend: data_1.key(),
             expected_error: None,
-            message_count: 2,
             added_backend: Some(data_2.added_msg()),
             removed_backend: Some(data_1.removed_msg())
         });
     }
 
     #[test]
-    fn ip_change_test() {
-        let data_1 = backend_ip1_port1();
-        let data_2 = backend_ip1_port2();
+    fn process_value_test_ip_change() {
+        let data_1 = test_data::backend_ip1_port1();
+        let data_2 = test_data::backend_ip1_port2();
 
         run_process_value_fields(ProcessValueFields{
-            value: data_2.raw(),
+            value: data_2.raw_vec(),
             last_backend: data_1.key(),
             expected_error: None,
-            message_count: 2,
             added_backend: Some(data_2.added_msg()),
             removed_backend: Some(data_1.removed_msg())
         });
     }
 
     #[test]
-    fn no_change_test() {
-        let data = backend_ip1_port1();
+    fn process_value_test_no_change() {
+        let data = test_data::backend_ip1_port1();
 
         run_process_value_fields(ProcessValueFields{
-            value: data.raw(),
+            value: data.raw_vec(),
             last_backend: data.key(),
             expected_error: None,
-            message_count: 0,
             added_backend: None,
             removed_backend: None
         });
     }
 
     #[test]
-    fn no_ip_test() {
-        let filler = backend_ip1_port1();
+    fn process_value_test_no_ip() {
+        let filler = test_data::backend_ip1_port1();
 
         run_process_value_fields(ProcessValueFields{
-            value: raw_no_ip(),
+            value: test_data::no_ip_vec(),
             last_backend: filler.key(),
             expected_error: Some(ResolverError::MissingZkData(ZkDataField::Ip)),
-            message_count: 0,
             added_backend: None,
             removed_backend: None
         });
     }
 
     #[test]
-    fn wrong_type_ip_test() {
-        let filler = backend_ip1_port1();
+    fn process_value_test_wrong_type_ip() {
+        let filler = test_data::backend_ip1_port1();
 
         run_process_value_fields(ProcessValueFields{
-            value: raw_wrong_type_ip(),
+            value: test_data::wrong_type_ip_vec(),
             last_backend: filler.key(),
             expected_error: Some(ResolverError::InvalidZkData(ZkDataField::Ip)),
-            message_count: 0,
             added_backend: None,
             removed_backend: None
         });
     }
 
     #[test]
-    fn invalid_ip_test() {
-        let filler = backend_ip1_port1();
+    fn process_value_test_invalid_ip() {
+        let filler = test_data::backend_ip1_port1();
 
         run_process_value_fields(ProcessValueFields{
-            value: raw_invalid_ip(),
+            value: test_data::invalid_ip_vec(),
             last_backend: filler.key(),
             expected_error: Some(ResolverError::InvalidZkData(ZkDataField::Ip)),
-            message_count: 0,
             added_backend: None,
             removed_backend: None
         });
     }
 
     #[test]
-    fn no_pg_url_test() {
-        let filler = backend_ip1_port1();
+    fn process_value_test_no_pg_url() {
+        let filler = test_data::backend_ip1_port1();
 
         run_process_value_fields(ProcessValueFields{
-            value: raw_no_pg_url(),
+            value: test_data::no_pg_url_vec(),
             last_backend: filler.key(),
             expected_error: Some(ResolverError::MissingZkData(
                 ZkDataField::PostgresUrl)),
-            message_count: 0,
             added_backend: None,
             removed_backend: None
         });
     }
 
     #[test]
-    fn wrong_type_pg_url_test() {
-        let filler = backend_ip1_port1();
+    fn process_value_test_wrong_type_pg_url() {
+        let filler = test_data::backend_ip1_port1();
 
         run_process_value_fields(ProcessValueFields{
-            value: raw_wrong_type_pg_url(),
+            value: test_data::wrong_type_pg_url_vec(),
             last_backend: filler.key(),
             expected_error: Some(ResolverError::InvalidZkData(
                 ZkDataField::PostgresUrl)),
-            message_count: 0,
             added_backend: None,
             removed_backend: None
         });
     }
 
     #[test]
-    fn invalid_pg_url_test() {
-        let filler = backend_ip1_port1();
+    fn process_value_test_invalid_pg_url() {
+        let filler = test_data::backend_ip1_port1();
 
         run_process_value_fields(ProcessValueFields{
-            value: raw_invalid_pg_url(),
+            value: test_data::invalid_pg_url_vec(),
             last_backend: filler.key(),
             expected_error: Some(ResolverError::InvalidZkData(
                 ZkDataField::PostgresUrl)),
-            message_count: 0,
             added_backend: None,
             removed_backend: None
         });
     }
 
     #[test]
-    fn no_port_pg_url_test() {
-        let filler = backend_ip1_port1();
+    fn process_value_test_no_port_pg_url() {
+        let filler = test_data::backend_ip1_port1();
 
         run_process_value_fields(ProcessValueFields{
-            value: raw_no_port_pg_url(),
+            value: test_data::no_port_pg_url_vec(),
             last_backend: filler.key(),
             expected_error: Some(ResolverError::MissingZkData(
                 ZkDataField::Port)),
-            message_count: 0,
             added_backend: None,
             removed_backend: None
         });
     }
 
     #[test]
-    fn invalid_json_test() {
-        let filler = backend_ip1_port1();
+    fn process_value_test_invalid_json() {
+        let filler = test_data::backend_ip1_port1();
 
         run_process_value_fields(ProcessValueFields{
-            value: raw_invalid_json(),
+            value: test_data::invalid_json_vec(),
             last_backend: filler.key(),
             expected_error: Some(ResolverError::InvalidZkJson),
-            message_count: 0,
             added_backend: None,
             removed_backend: None
         });

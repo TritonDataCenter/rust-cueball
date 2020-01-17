@@ -342,4 +342,3 @@ pub fn no_port_pg_url_vec() -> Vec<u8> {
         }
     "#.as_bytes().to_vec()
 }
-

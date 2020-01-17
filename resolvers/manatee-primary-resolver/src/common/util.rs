@@ -40,9 +40,6 @@ use crate::{
 };
 use super::test_data;
 
-// TODO run clippy
-// TODO transfer to rust-cueball monorepo
-
 pub const DEFAULT_LOG_LEVEL: Level = Level::Info;
 pub const LOG_LEVEL_ENV_VAR: &str = "RESOLVER_LOG_LEVEL";
 

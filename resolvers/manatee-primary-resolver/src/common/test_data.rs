@@ -122,7 +122,7 @@ pub fn invalid_json_vec() -> Vec<u8> {
 }
 
 pub fn no_ip_vec() -> Vec<u8> {
-    r#" {
+    br#" {
             "generation": 1,
             "primary": {
                 "id": "10.77.77.21:5432:12345",
@@ -149,11 +149,11 @@ pub fn no_ip_vec() -> Vec<u8> {
             ],
             "initWal": "0/16522D8"
         }
-    "#.as_bytes().to_vec()
+    "#.to_vec()
 }
 
 pub fn invalid_ip_vec() -> Vec<u8> {
-    r#" {
+    br#" {
             "generation": 1,
             "primary": {
                 "id": "10.77.77.21:5432:12345",
@@ -181,11 +181,11 @@ pub fn invalid_ip_vec() -> Vec<u8> {
             ],
             "initWal": "0/16522D8"
         }
-    "#.as_bytes().to_vec()
+    "#.to_vec()
 }
 
 pub fn wrong_type_ip_vec() -> Vec<u8> {
-    r#" {
+    br#" {
             "generation": 1,
             "primary": {
                 "id": "10.77.77.21:5432:12345",
@@ -213,11 +213,11 @@ pub fn wrong_type_ip_vec() -> Vec<u8> {
             ],
             "initWal": "0/16522D8"
         }
-    "#.as_bytes().to_vec()
+    "#.to_vec()
 }
 
 pub fn no_pg_url_vec() -> Vec<u8> {
-    r#" {
+    br#" {
             "generation": 1,
             "primary": {
                 "id": "10.77.77.28:5432:12345",
@@ -244,11 +244,11 @@ pub fn no_pg_url_vec() -> Vec<u8> {
             ],
             "initWal": "0/16522D8"
         }
-    "#.as_bytes().to_vec()
+    "#.to_vec()
 }
 
 pub fn invalid_pg_url_vec() -> Vec<u8> {
-    r#" {
+    br#" {
             "generation": 1,
             "primary": {
                 "id": "10.77.77.28:5432:12345",
@@ -276,11 +276,11 @@ pub fn invalid_pg_url_vec() -> Vec<u8> {
             ],
             "initWal": "0/16522D8"
         }
-    "#.as_bytes().to_vec()
+    "#.to_vec()
 }
 
 pub fn wrong_type_pg_url_vec() -> Vec<u8> {
-    r#" {
+    br#" {
             "generation": 1,
             "primary": {
                 "id": "10.77.77.28:5432:12345",
@@ -308,11 +308,11 @@ pub fn wrong_type_pg_url_vec() -> Vec<u8> {
             ],
             "initWal": "0/16522D8"
         }
-    "#.as_bytes().to_vec()
+    "#.to_vec()
 }
 
 pub fn no_port_pg_url_vec() -> Vec<u8> {
-    r#" {
+    br#" {
             "generation": 1,
             "primary": {
                 "id": "10.77.77.28:5432:12345",
@@ -340,5 +340,5 @@ pub fn no_port_pg_url_vec() -> Vec<u8> {
             ],
             "initWal": "0/16522D8"
         }
-    "#.as_bytes().to_vec()
+    "#.to_vec()
 }

@@ -6,4 +6,5 @@ members = [
     "connections/postgres-connection",
     "connections/tcp-stream-connection",
     "cueball",
+    "tools/manatee-echo-resolver",
 ]

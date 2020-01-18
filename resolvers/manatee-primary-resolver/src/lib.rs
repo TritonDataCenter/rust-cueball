@@ -1,5 +1,5 @@
 //
-// Copyright 2019 Joyent, Inc.
+// Copyright 2020 Joyent, Inc.
 //
 // THEORY STATEMENT -- READ THIS FIRST!
 //
@@ -33,6 +33,7 @@ use std::time::{Duration, Instant};
 use clap::{crate_name, crate_version};
 use failure::Error as FailureError;
 use futures::future::{ok, loop_fn, Either, Future, Loop};
+use futures::stream::Stream;
 use itertools::Itertools;
 use serde::Deserialize;
 use serde_json;
@@ -233,7 +234,7 @@ enum NextAction {
 // to the next iteration.
 //
 struct WatchLoopState {
-    watcher: Box<dyn futures::stream::Stream
+    watcher: Box<dyn Stream
         <Item = WatchedEvent, Error = ()> + Send>,
     curr_event: WatchedEvent,
     delay: Duration

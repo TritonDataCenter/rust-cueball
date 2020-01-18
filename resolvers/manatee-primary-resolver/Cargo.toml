@@ -1,6 +1,6 @@
 [package]
 name = "cueball-manatee-primary-resolver"
-version = "0.3.0"
+version = "0.3.1"
 authors = ["Kelly McLaughlin <kelly.mclaughlin@joyent.com>", "Isaac Davis <isaac.davis@joyent.com>"]
 description = """
 An implementation of the cueball Resolver trait that is specific to the Joyent manatee project. It queries a zookeeper

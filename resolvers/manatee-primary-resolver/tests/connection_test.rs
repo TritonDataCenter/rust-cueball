@@ -2,28 +2,28 @@
 // Copyright 2020 Joyent, Inc
 //
 
+#[cfg(target_os = "solaris")]
 use std::sync::mpsc::channel;
+#[cfg(target_os = "solaris")]
 use std::thread;
 
+#[cfg(target_os = "solaris")]
 use serial_test::serial;
 
+#[cfg(target_os = "solaris")]
 use cueball::resolver::Resolver;
 
-use cueball_manatee_primary_resolver::{
-    ManateePrimaryResolver,
-    RECONNECT_DELAY,
-    TCP_CONNECT_TIMEOUT,
-    common
-};
+#[cfg(target_os = "solaris")]
 use common::util::{
-    self,
-    TestContext,
-    TestError,
-    ZkStatus,
-    RESOLVER_STARTUP_DELAY,
-    SLACK_DURATION
+    self, TestContext, TestError, ZkStatus, RESOLVER_STARTUP_DELAY,
+    SLACK_DURATION,
+};
+#[cfg(target_os = "solaris")]
+use cueball_manatee_primary_resolver::{
+    common, ManateePrimaryResolver, RECONNECT_DELAY, TCP_CONNECT_TIMEOUT,
 };
 
+#[cfg(target_os = "solaris")]
 #[test]
 #[serial]
 fn connection_test_start_with_unreachable_zookeeper() {
@@ -40,7 +40,10 @@ fn connection_test_start_with_unreachable_zookeeper() {
         // We expect resolver not to connect at this point
         thread::spawn(move || {
             let mut resolver = ManateePrimaryResolver::new(
-                connect_string_resolver, root_path_resolver, Some(log));
+                connect_string_resolver,
+                root_path_resolver,
+                Some(log),
+            );
             resolver.run(tx);
         });
 
@@ -51,7 +54,9 @@ fn connection_test_start_with_unreachable_zookeeper() {
         if connected {
             return Err(TestError::IncorrectBehavior(
                 "Resolver should not be connected \
-                (is ZooKeeper running, somehow?)".to_string()));
+                 (is ZooKeeper running, somehow?)"
+                    .to_string(),
+            ));
         }
 
         // Turn ZooKeeper back on
@@ -67,12 +72,14 @@ fn connection_test_start_with_unreachable_zookeeper() {
         let connected = ctx.resolver_connected(&rx)?;
         if !connected {
             return Err(TestError::IncorrectBehavior(
-                "Resolver should be connected to ZooKeeper".to_string()));
+                "Resolver should be connected to ZooKeeper".to_string(),
+            ));
         }
         Ok(())
     });
 }
 
+#[cfg(target_os = "solaris")]
 #[test]
 #[serial]
 fn connection_test_reconnect_after_zk_hiccup() {
@@ -87,7 +94,10 @@ fn connection_test_reconnect_after_zk_hiccup() {
 
         thread::spawn(move || {
             let mut resolver = ManateePrimaryResolver::new(
-                connect_string_resolver, root_path_resolver, Some(log));
+                connect_string_resolver,
+                root_path_resolver,
+                Some(log),
+            );
             resolver.run(tx);
         });
 
@@ -97,7 +107,8 @@ fn connection_test_reconnect_after_zk_hiccup() {
         let connected = ctx.resolver_connected(&rx)?;
         if !connected {
             return Err(TestError::IncorrectBehavior(
-                "Resolver should be connected to ZooKeeper".to_string()));
+                "Resolver should be connected to ZooKeeper".to_string(),
+            ));
         }
 
         // Turn ZooKeeper off
@@ -107,7 +118,9 @@ fn connection_test_reconnect_after_zk_hiccup() {
         if connected {
             return Err(TestError::IncorrectBehavior(
                 "Resolver should not be connected \
-                (is ZooKeeper running, somehow?)".to_string()));
+                 (is ZooKeeper running, somehow?)"
+                    .to_string(),
+            ));
         }
 
         // Turn ZooKeeper back on
@@ -123,7 +136,8 @@ fn connection_test_reconnect_after_zk_hiccup() {
         let connected = ctx.resolver_connected(&rx)?;
         if !connected {
             return Err(TestError::IncorrectBehavior(
-                "Resolver should be connected to ZooKeeper".to_string()));
+                "Resolver should be connected to ZooKeeper".to_string(),
+            ));
         }
         Ok(())
     });

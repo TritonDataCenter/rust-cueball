@@ -2,22 +2,24 @@
 // Copyright 2020 Joyent, Inc
 //
 
+#[cfg(target_os = "solaris")]
 use std::sync::mpsc::channel;
+#[cfg(target_os = "solaris")]
 use std::thread;
 
+#[cfg(target_os = "solaris")]
 use cueball::resolver::Resolver;
 
+#[cfg(target_os = "solaris")]
+use cueball_manatee_primary_resolver::common::{test_data, util};
+#[cfg(target_os = "solaris")]
 use cueball_manatee_primary_resolver::{
-    ManateePrimaryResolver,
-    WATCH_LOOP_DELAY
+    ManateePrimaryResolver, WATCH_LOOP_DELAY,
 };
-use cueball_manatee_primary_resolver::common::{util, test_data};
-use util::{
-    TestContext,
-    TestAction,
-    RESOLVER_STARTUP_DELAY
-};
+#[cfg(target_os = "solaris")]
+use util::{TestAction, TestContext, RESOLVER_STARTUP_DELAY};
 
+#[cfg(target_os = "solaris")]
 #[test]
 fn watch_test_nonexistent_node() {
     TestContext::default().run_func_and_finalize(|ctx| {
@@ -32,7 +34,10 @@ fn watch_test_nonexistent_node() {
         // Start the resolver
         thread::spawn(move || {
             let mut resolver = ManateePrimaryResolver::new(
-                connect_string_resolver, root_path_resolver, Some(log));
+                connect_string_resolver,
+                root_path_resolver,
+                Some(log),
+            );
             resolver.run(tx);
         });
 
@@ -48,15 +53,19 @@ fn watch_test_nonexistent_node() {
         // Run a basic test case to make sure all is well
         let data_1 = test_data::backend_ip1_port1();
         let data_2 = test_data::backend_ip2_port2();
-        ctx.run_test_case(TestAction {
-            start_data: data_1.raw_vec(),
-            end_data: data_2.raw_vec(),
-            added_backend: Some(data_2.added_msg()),
-            removed_backend: Some(data_1.removed_msg())
-        }, Some(&rx))
+        ctx.run_test_case(
+            TestAction {
+                start_data: data_1.raw_vec(),
+                end_data: data_2.raw_vec(),
+                added_backend: Some(data_2.added_msg()),
+                removed_backend: Some(data_1.removed_msg()),
+            },
+            Some(&rx),
+        )
     });
 }
 
+#[cfg(target_os = "solaris")]
 #[test]
 fn watch_test_disappearing_node() {
     TestContext::default().run_func_and_finalize(|ctx| {
@@ -69,7 +78,10 @@ fn watch_test_disappearing_node() {
         // Start the resolver
         thread::spawn(move || {
             let mut resolver = ManateePrimaryResolver::new(
-                connect_string_resolver, root_path_resolver, Some(log));
+                connect_string_resolver,
+                root_path_resolver,
+                Some(log),
+            );
             resolver.run(tx);
         });
 
@@ -79,12 +91,15 @@ fn watch_test_disappearing_node() {
         // Run a basic test case to make sure all is well
         let data_1 = test_data::backend_ip1_port1();
         let data_2 = test_data::backend_ip2_port2();
-        ctx.run_test_case(TestAction {
-            start_data: data_1.raw_vec(),
-            end_data: data_2.raw_vec(),
-            added_backend: Some(data_2.added_msg()),
-            removed_backend: Some(data_1.removed_msg())
-        }, Some(&rx))?;
+        ctx.run_test_case(
+            TestAction {
+                start_data: data_1.raw_vec(),
+                end_data: data_2.raw_vec(),
+                added_backend: Some(data_2.added_msg()),
+                removed_backend: Some(data_1.removed_msg()),
+            },
+            Some(&rx),
+        )?;
 
         // Delete the test nodes, causing the resolver to drop its watch
         ctx.teardown_zk_nodes()?;
@@ -96,15 +111,19 @@ fn watch_test_disappearing_node() {
         thread::sleep(WATCH_LOOP_DELAY);
 
         // Run the test case again
-        ctx.run_test_case(TestAction {
-            start_data: data_1.raw_vec(),
-            end_data: data_2.raw_vec(),
-            added_backend: Some(data_2.added_msg()),
-            removed_backend: Some(data_1.removed_msg())
-        }, Some(&rx))
+        ctx.run_test_case(
+            TestAction {
+                start_data: data_1.raw_vec(),
+                end_data: data_2.raw_vec(),
+                added_backend: Some(data_2.added_msg()),
+                removed_backend: Some(data_1.removed_msg()),
+            },
+            Some(&rx),
+        )
     });
 }
 
+#[cfg(target_os = "solaris")]
 #[test]
 fn watch_test_port_ip_change() {
     let data_1 = test_data::backend_ip1_port1();
@@ -114,10 +133,11 @@ fn watch_test_port_ip_change() {
         start_data: data_1.raw_vec(),
         end_data: data_2.raw_vec(),
         added_backend: Some(data_2.added_msg()),
-        removed_backend: Some(data_1.removed_msg())
+        removed_backend: Some(data_1.removed_msg()),
     });
 }
 
+#[cfg(target_os = "solaris")]
 #[test]
 fn watch_test_ip_change() {
     let data_1 = test_data::backend_ip1_port1();
@@ -127,10 +147,11 @@ fn watch_test_ip_change() {
         start_data: data_1.raw_vec(),
         end_data: data_2.raw_vec(),
         added_backend: Some(data_2.added_msg()),
-        removed_backend: Some(data_1.removed_msg())
+        removed_backend: Some(data_1.removed_msg()),
     });
 }
 
+#[cfg(target_os = "solaris")]
 #[test]
 fn watch_test_port_change() {
     let data_1 = test_data::backend_ip1_port1();
@@ -140,20 +161,22 @@ fn watch_test_port_change() {
         start_data: data_1.raw_vec(),
         end_data: data_2.raw_vec(),
         added_backend: Some(data_2.added_msg()),
-        removed_backend: Some(data_1.removed_msg())
+        removed_backend: Some(data_1.removed_msg()),
     });
 }
 
+#[cfg(target_os = "solaris")]
 #[test]
 fn watch_test_no_change() {
     TestContext::default().run_action_and_finalize(TestAction {
         start_data: test_data::backend_ip1_port1().raw_vec(),
         end_data: test_data::backend_ip1_port1().raw_vec(),
         added_backend: None,
-        removed_backend: None
+        removed_backend: None,
     });
 }
 
+#[cfg(target_os = "solaris")]
 #[test]
 fn watch_test_invalid_to_valid() {
     let data = test_data::backend_ip1_port1();
@@ -162,10 +185,11 @@ fn watch_test_invalid_to_valid() {
         start_data: test_data::invalid_json_vec(),
         end_data: data.raw_vec(),
         added_backend: Some(data.added_msg()),
-        removed_backend: None
+        removed_backend: None,
     });
 }
 
+#[cfg(target_os = "solaris")]
 #[test]
 fn watch_test_invalid_to_invalid() {
     //
@@ -176,10 +200,11 @@ fn watch_test_invalid_to_invalid() {
         start_data: test_data::invalid_json_vec(),
         end_data: test_data::no_ip_vec(),
         added_backend: None,
-        removed_backend: None
+        removed_backend: None,
     });
 }
 
+#[cfg(target_os = "solaris")]
 #[test]
 fn watch_test_valid_to_no_ip() {
     let data = test_data::backend_ip1_port1();
@@ -188,10 +213,11 @@ fn watch_test_valid_to_no_ip() {
         start_data: data.raw_vec(),
         end_data: test_data::no_ip_vec(),
         added_backend: None,
-        removed_backend: None
+        removed_backend: None,
     });
 }
 
+#[cfg(target_os = "solaris")]
 #[test]
 fn watch_test_valid_to_invalid_ip() {
     let data = test_data::backend_ip1_port1();
@@ -200,10 +226,11 @@ fn watch_test_valid_to_invalid_ip() {
         start_data: data.raw_vec(),
         end_data: test_data::invalid_ip_vec(),
         added_backend: None,
-        removed_backend: None
+        removed_backend: None,
     });
 }
 
+#[cfg(target_os = "solaris")]
 #[test]
 fn watch_test_valid_to_wrong_type_ip() {
     let data = test_data::backend_ip1_port1();
@@ -212,10 +239,11 @@ fn watch_test_valid_to_wrong_type_ip() {
         start_data: data.raw_vec(),
         end_data: test_data::wrong_type_ip_vec(),
         added_backend: None,
-        removed_backend: None
+        removed_backend: None,
     });
 }
 
+#[cfg(target_os = "solaris")]
 #[test]
 fn watch_test_valid_to_no_pg_url() {
     let data = test_data::backend_ip1_port1();
@@ -224,10 +252,11 @@ fn watch_test_valid_to_no_pg_url() {
         start_data: data.raw_vec(),
         end_data: test_data::no_pg_url_vec(),
         added_backend: None,
-        removed_backend: None
+        removed_backend: None,
     });
 }
 
+#[cfg(target_os = "solaris")]
 #[test]
 fn watch_test_valid_to_invalid_pg_url() {
     let data = test_data::backend_ip1_port1();
@@ -236,10 +265,11 @@ fn watch_test_valid_to_invalid_pg_url() {
         start_data: data.raw_vec(),
         end_data: test_data::invalid_pg_url_vec(),
         added_backend: None,
-        removed_backend: None
+        removed_backend: None,
     });
 }
 
+#[cfg(target_os = "solaris")]
 #[test]
 fn watch_test_valid_to_wrong_type_pg_url() {
     let data = test_data::backend_ip1_port1();
@@ -248,10 +278,11 @@ fn watch_test_valid_to_wrong_type_pg_url() {
         start_data: data.raw_vec(),
         end_data: test_data::wrong_type_pg_url_vec(),
         added_backend: None,
-        removed_backend: None
+        removed_backend: None,
     });
 }
 
+#[cfg(target_os = "solaris")]
 #[test]
 fn watch_test_valid_to_no_port_pg_url() {
     let data = test_data::backend_ip1_port1();
@@ -260,10 +291,11 @@ fn watch_test_valid_to_no_port_pg_url() {
         start_data: data.raw_vec(),
         end_data: test_data::no_port_pg_url_vec(),
         added_backend: None,
-        removed_backend: None
+        removed_backend: None,
     });
 }
 
+#[cfg(target_os = "solaris")]
 #[test]
 fn watch_test_valid_to_invalid_json() {
     let data = test_data::backend_ip1_port1();
@@ -272,6 +304,6 @@ fn watch_test_valid_to_invalid_json() {
         start_data: data.raw_vec(),
         end_data: test_data::invalid_json_vec(),
         added_backend: None,
-        removed_backend: None
+        removed_backend: None,
     });
 }

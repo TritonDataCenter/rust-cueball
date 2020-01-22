@@ -1,0 +1,19 @@
+[package]
+name = "manatee-echo-resolver"
+version = "0.1.0"
+authors = ["Isaac Davis <isaac.davis@joyent.com>"]
+description = """
+Runs a manatee primary resolver instance and prints its logging, as well as
+messages received over the cueball channel, to standard out.
+"""
+repository = "https://github.com/joyent/rust-cueball"
+keywords = ["pool","joyent"]
+readme = "./README.md"
+license = "MPL-2.0"
+edition = "2018"
+
+[dependencies]
+clap = "2.32"
+cueball = { path = "../../cueball", version = "0.3.0" }
+cueball-manatee-primary-resolver = { path = "../../resolvers/manatee-primary-resolver" }
+slog = { version = "2.4.1", features = [ "max_level_trace" ] }

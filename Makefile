@@ -24,6 +24,10 @@ build-cueball:
 test:
 	$(CARGO) test
 
+.PHONY: test-unit
+test-unit:
+	$(CARGO) test --lib
+
 .PHONY: check
 check:
 	$(CARGO) clean && $(CARGO) clippy $(RUST_CLIPPY_ARGS)

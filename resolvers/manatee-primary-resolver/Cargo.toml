@@ -21,7 +21,7 @@ futures = "0.1.28"
 serde = { version ="1.0.102", features = ["derive"]}
 serde_json = "1.0.40"
 slog = { version = "2.4.1", features = [ "max_level_trace" ] }
-slog-bunyan = { git = "https://github.com/slog-rs/bunyan" }
+slog-bunyan = "2.2.0"
 tokio = "0.1.22"
 tokio-zookeeper = { git = 'https://github.com/joyent/tokio-zookeeper', version = "0.1.0" }
 url = "2.1.0"

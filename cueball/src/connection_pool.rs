@@ -1,4 +1,4 @@
-// Copyright 2019 Joyent, Inc.
+// Copyright 2020 Joyent, Inc.
 
 pub mod types;
 
@@ -15,7 +15,7 @@ use std::sync::{Arc, Barrier};
 use std::{thread, time};
 
 use chrono::Duration;
-use slog::{debug, error, info, o, warn, Drain, Logger};
+use slog::{debug, error, info, o, trace, warn, Drain, Logger};
 use timer::Guard;
 
 use crate::backend::{Backend, BackendKey};
@@ -41,7 +41,12 @@ const DEFAULT_DECOHERENCE_INTERVAL: u64 = 300;
 const DEFAULT_CONNECTION_CHECK_INTERVAL: u64 = 30;
 
 /// A pool of connections to a multi-node service
-pub struct ConnectionPool<C, R, F> {
+pub struct ConnectionPool<C, R, F>
+where
+    C: Connection,
+    R: Resolver,
+    F: FnMut(&Backend) -> C + Send + 'static,
+{
     protected_data: ProtectedData<C>,
     resolver_thread: Option<thread::JoinHandle<()>>,
     resolver_rx_thread: Option<thread::JoinHandle<()>>,
@@ -62,7 +67,12 @@ pub struct ConnectionPool<C, R, F> {
     _connection_function: PhantomData<F>,
 }
 
-impl<C: Debug, R: Debug, F: Debug> Debug for ConnectionPool<C, R, F> {
+impl<C: Debug, R: Debug, F: Debug> Debug for ConnectionPool<C, R, F>
+where
+    C: Connection,
+    R: Resolver,
+    F: FnMut(&Backend) -> C + Send,
+{
     fn fmt(&self, f: &mut Formatter) -> FmtResult {
         match *self {
             ConnectionPool {
@@ -118,7 +128,7 @@ impl<C, R, F> Clone for ConnectionPool<C, R, F>
 where
     C: Connection,
     R: Resolver,
-    F: FnMut(&Backend) -> C,
+    F: FnMut(&Backend) -> C + Send,
 {
     fn clone(&self) -> ConnectionPool<C, R, F> {
         ConnectionPool {
@@ -290,6 +300,8 @@ where
             && self.resolver_tx.is_some()
             && self.rebalance_thread.is_some()
         {
+            trace!(self.log, "stop called by original pool");
+
             // Transition state to Stopping
             self.state = ConnectionPoolState::Stopping;
 
@@ -323,7 +335,7 @@ where
             let rebalance_thread = self.rebalance_thread.take().unwrap();
             let _ = rebalance_thread.join();
             drop(self.resolver_thread.take().unwrap());
-            debug!(self.log, "stop: Joined connection pool worker threads");
+            trace!(self.log, "stop: joined connection pool worker threads");
 
             // Mark all connections as unwanted and close what is in the pool
             let mut connection_data =
@@ -421,6 +433,7 @@ where
             self.state = ConnectionPoolState::Stopped;
             Ok(())
         } else {
+            trace!(self.log, "stop called by pool clone");
             Err(Error::StopCalledByClone)
         }
     }
@@ -640,6 +653,20 @@ where
             None => warn!(self.log, "Connection not found"),
         }
         self.protected_data.condvar_notify();
+    }
+}
+
+impl<C, R, F> Drop for ConnectionPool<C, R, F>
+where
+    C: Connection,
+    R: Resolver,
+    F: FnMut(&Backend) -> C + Send,
+{
+    fn drop(&mut self) {
+        // Stop the pool and ignore the result. The returned Result will be an
+        // Err if the pool instance going out of scope is a clone,
+        // but there is not further error handling to be done here.
+        let _ = self.stop();
     }
 }
 
@@ -994,7 +1021,9 @@ fn resolver_recv_loop<C>(
     C: Connection,
 {
     let mut done = false;
+
     while !done {
+        let log = log.clone();
         let result = match rx.recv() {
             Ok(BackendMsg::AddedMsg(added_msg)) => {
                 info!(log, "Adding backend {}", added_msg.key);
@@ -1021,6 +1050,10 @@ fn resolver_recv_loop<C>(
                 let mut rebalance = rebalance_clone.get_lock();
                 if !*rebalance {
                     *rebalance = true;
+                    trace!(
+                        log,
+                        "resolver_recv_loop notifying rebalance condvar"
+                    );
                     rebalance_clone.condvar_notify();
                 }
             });
@@ -1041,12 +1074,11 @@ fn rebalancer_loop<C, F>(
     F: FnMut(&Backend) -> C,
 {
     let mut done = stop.load(AtomicOrdering::Relaxed);
-
     while !done {
         let mut rebalance = rebalance_check.get_lock();
-
+        trace!(log, "starting condvar wait");
         rebalance = rebalance_check.condvar_wait(rebalance);
-
+        trace!(log, "condvar received notification");
         if *rebalance {
             // Briefly sleep in case the resolver notifies the pool of multiple
             // changes within a short period
@@ -1082,6 +1114,7 @@ fn rebalancer_loop<C, F>(
 
         done = stop.load(AtomicOrdering::Relaxed);
     }
+    trace!(log, "rebalancer_loop exiting");
 }
 
 /// Start a thread to run periodic decoherence on the connection pool
@@ -1178,6 +1211,7 @@ fn check_pool_connections<C>(
         debug!(log, "No connections to check, signaling rebalance check");
         let mut rebalance = rebalance_check.get_lock();
         *rebalance = true;
+        trace!(log, "check_pool_connections notifying rebalance condvar");
         rebalance_check.condvar_notify();
         return;
     }

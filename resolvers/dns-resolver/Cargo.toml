@@ -1,0 +1,31 @@
+[package]
+name = "cueball-dns-resolver"
+version = "0.3.0"
+authors = ["Jon Anderson <jon.anderson@joyent.com>"]
+description = """
+This is a rust implementation of Joyent's node-cueball DNS resolver.
+"""
+repository = "https://github.com/joyent/rust-cueball"
+keywords = ["pool","joyent"]
+readme = "../../README.md"
+license = "MPL-2.0"
+edition = "2018"
+
+[dependencies]
+base64 = "0.10.1"
+chrono = "0.4"
+cueball = "0.3.0"
+derive_more = "0.14.0"
+futures = "0.1"
+resolv-conf = "0.6.2"
+sha1 = "0.6.0"
+slog = "2.4.1"
+state_machine_future = "0.2.0"
+trust-dns-resolver = "0.11.1"
+trust-dns = "^0.16.1"
+tokio = "0.1.5"
+tokio-core = "0.1.17"
+unicode-normalization = "=0.1.5"
+
+[dev-dependencies]
+slog-term = "2.4.0"

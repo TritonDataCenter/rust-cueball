@@ -976,6 +976,10 @@ fn add_connections<C, F>(
                                 .push_back(connection_key_pair);
                             connection_data.stats.total_connections += 1.into();
                             connection_data.stats.idle_connections += 1.into();
+                            connection_data
+                                .unwanted_connection_counts
+                                .entry(b_key.clone())
+                                .and_modify(|e| *e -= 1u32.into());
                             connection_data.stats.pending_connections -=
                                 1.into();
 
@@ -1205,7 +1209,7 @@ fn check_pool_connections<C>(
     let len = connection_data.connections.len();
 
     if len == 0 {
-        debug!(log, "No connections to check, signaling rebalance check");
+        debug!(log, "No connections found, signaling rebalance check");
         let mut rebalance = rebalance_check.get_lock();
         *rebalance = true;
         trace!(log, "check_pool_connections notifying rebalance condvar");
@@ -1252,21 +1256,8 @@ fn check_pool_connections<C>(
                         *e
                     );
                 });
-            connection_data
-                .unwanted_connection_counts
-                .entry(key.clone())
-                .and_modify(|e| {
-                    *e += ConnectionCount::from(*count);
-                    debug!(
-                        log,
-                        "Unwanted connection count for {} now: {}",
-                        key.clone(),
-                        *e
-                    );
-                })
-                .or_insert_with(|| ConnectionCount::from(*count));
         }
-        connection_data.stats.idle_connections -= removed.into();
+        connection_data.stats.total_connections -= removed.into();
 
         debug!(
             log,

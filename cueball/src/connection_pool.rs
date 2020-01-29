@@ -402,8 +402,6 @@ where
                             close_connection(close_log, close_key, conn)
                         });
                         connection_data.stats.idle_connections -= 1.into();
-                        connection_data.stats.idle_connections -=
-                            ConnectionCount::from(1);
                     }
                     Some(ConnectionKeyPair((_key, None))) => {
                         // Should never happen

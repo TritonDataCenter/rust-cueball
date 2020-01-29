@@ -639,7 +639,6 @@ where
                 if conn.has_broken() {
                     warn!(self.log, "Found an invalid connection, not returning to the pool");
                     connection_data.stats.total_connections -= 1.into();
-                    connection_data.stats.idle_connections -= 1.into();
                 } else {
                     connection_data.connections.push_back((key, conn).into());
                     connection_data.stats.idle_connections += 1.into();

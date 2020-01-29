@@ -362,9 +362,6 @@ where
 
             connection_data.backends.clear();
 
-            let mut connections_remaining =
-                connection_data.stats.total_connections;
-
             drop(connection_data);
 
             if self.decoherence_timer.is_some() {
@@ -374,59 +371,55 @@ where
             if self.connection_check_timer.is_some() {
                 let _timer = self.connection_check_timer.take();
             }
-            // Wait for all outstanding threads to be returned to the pool and
-            // close those
-            while connections_remaining > 0.into() {
-                connection_data = self.protected_data.connection_data_lock();
 
-                info!(
-                    self.log,
-                    "connections remaining: {}", connections_remaining
-                );
+            let mut connection_data =
+                self.protected_data.connection_data_lock();
 
-                while !connection_data.connections.is_empty() {
-                    match connection_data.connections.pop_front() {
-                        Some(ConnectionKeyPair((key, Some(conn)))) => {
-                            let close_log = self.log.clone();
-                            let close_key = key.clone();
-                            // Do not want to block the pool on external code so
-                            // spawn threads to run the connection close
-                            // function. This means the pool may move to the
-                            // Stopped state prior to all connections being
-                            // closed. If the program is exiting this should not
-                            // matter and if the program is continuing it is the
-                            // case that when this function returns a close
-                            // thread has been created for all connection pool
-                            // connections. In the future we might add an option
-                            // to wait for all threads if that was an important
-                            // use case for users.
-                            let _close_thread = thread::spawn(|| {
-                                close_connection(close_log, close_key, conn)
-                            });
-                            connection_data.stats.idle_connections -= 1.into();
-                            connections_remaining -= 1.into();
-                        }
-                        Some(ConnectionKeyPair((_key, None))) => {
-                            // Should never happen
-                            let err_msg = String::from(
-                                "Found backend key with no connection",
-                            );
-                            warn!(self.log, "{}", err_msg);
-                        }
-                        None => {
-                            // This also should never happen here because we checked
-                            // if the queue was empty before entering the loop
-                            let err_msg =
-                                String::from("Unable to retrieve a connection");
-                            warn!(self.log, "{}", err_msg);
-                        }
+            info!(
+                self.log,
+                "connections queue size: {}",
+                connection_data.connections.len()
+            );
+
+            while !connection_data.connections.is_empty() {
+                match connection_data.connections.pop_front() {
+                    Some(ConnectionKeyPair((key, Some(conn)))) => {
+                        info!(self.log, "closing connection {}", key);
+                        let close_log = self.log.clone();
+                        let close_key = key.clone();
+                        // Do not want to block the pool on external code so
+                        // spawn threads to run the connection close
+                        // function. This means the pool may move to the
+                        // Stopped state prior to all connections being
+                        // closed. If the program is exiting this should not
+                        // matter and if the program is continuing it is the
+                        // case that when this function returns a close
+                        // thread has been created for all connection pool
+                        // connections. In the future we might add an option
+                        // to wait for all threads if that was an important
+                        // use case for users.
+                        let _close_thread = thread::spawn(|| {
+                            close_connection(close_log, close_key, conn)
+                        });
+                        connection_data.stats.idle_connections -= 1.into();
+                    }
+                    Some(ConnectionKeyPair((_key, None))) => {
+                        // Should never happen
+                        let err_msg = String::from(
+                            "Found backend key with no connection",
+                        );
+                        warn!(self.log, "{}", err_msg);
+                    }
+                    None => {
+                        // This also should never happen here because we checked
+                        // if the queue was empty before entering the loop
+                        let err_msg =
+                            String::from("Unable to retrieve a connection");
+                        warn!(self.log, "{}", err_msg);
                     }
                 }
-
-                drop(connection_data);
             }
 
-            connection_data = self.protected_data.connection_data_lock();
             connection_data.stats.total_connections = 0.into();
 
             // Move state to Stopped
@@ -645,6 +638,7 @@ where
             Some(conn) => {
                 if conn.has_broken() {
                     warn!(self.log, "Found an invalid connection, not returning to the pool");
+                    connection_data.stats.total_connections -= 1.into();
                 } else {
                     connection_data.connections.push_back((key, conn).into());
                     connection_data.stats.idle_connections += 1.into();
@@ -979,6 +973,10 @@ fn add_connections<C, F>(
                                 .push_back(connection_key_pair);
                             connection_data.stats.total_connections += 1.into();
                             connection_data.stats.idle_connections += 1.into();
+                            connection_data
+                                .unwanted_connection_counts
+                                .entry(b_key.clone())
+                                .and_modify(|e| *e -= 1u32.into());
                             connection_data.stats.pending_connections -=
                                 1.into();
 
@@ -1208,7 +1206,7 @@ fn check_pool_connections<C>(
     let len = connection_data.connections.len();
 
     if len == 0 {
-        debug!(log, "No connections to check, signaling rebalance check");
+        debug!(log, "No connections found, signaling rebalance check");
         let mut rebalance = rebalance_check.get_lock();
         *rebalance = true;
         trace!(log, "check_pool_connections notifying rebalance condvar");
@@ -1224,6 +1222,7 @@ fn check_pool_connections<C>(
     connection_data.connections.retain(|pair| match pair {
         ConnectionKeyPair((key, Some(conn))) => {
             if conn.has_broken() {
+                warn!(log, "found broken connection!");
                 removed += 1;
                 *remove_count.entry(key.clone()).or_insert(0) += 1;
                 false
@@ -1254,21 +1253,15 @@ fn check_pool_connections<C>(
                         *e
                     );
                 });
-            connection_data
-                .unwanted_connection_counts
-                .entry(key.clone())
-                .and_modify(|e| {
-                    *e += ConnectionCount::from(*count);
-                    debug!(
-                        log,
-                        "Unwanted onnection count for {} now: {}",
-                        key.clone(),
-                        *e
-                    );
-                })
-                .or_insert_with(|| ConnectionCount::from(*count));
         }
-        connection_data.stats.idle_connections -= removed.into();
+        connection_data.stats.total_connections -= removed.into();
+
+        debug!(
+            log,
+            "idle_connections now: {}, total_connections now: {}",
+            connection_data.stats.idle_connections,
+            connection_data.stats.total_connections
+        );
 
         let mut rebalance = rebalance_check.get_lock();
         if !*rebalance {

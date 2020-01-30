@@ -32,50 +32,29 @@ use std::time::{Duration, Instant};
 
 use clap::{crate_name, crate_version};
 use failure::Error as FailureError;
-use futures::future::{ok, loop_fn, Either, Future, Loop};
+use futures::future::{loop_fn, ok, Either, Future, Loop};
 use futures::stream::Stream;
 use itertools::Itertools;
 use serde::Deserialize;
 use serde_json;
 use serde_json::Value as SerdeJsonValue;
-use slog::{
-    error,
-    info,
-    debug,
-    o,
-    Drain,
-    Key,
-    LevelFilter,
-    Logger,
-    Record,
-    Serializer
-};
 use slog::Result as SlogResult;
 use slog::Value as SlogValue;
-use tokio_zookeeper::{
-    KeeperState,
-    WatchedEvent,
-    WatchedEventType,
-    ZooKeeper,
-    ZooKeeperBuilder
+use slog::{
+    debug, error, info, o, Drain, Key, LevelFilter, Logger, Record, Serializer,
 };
 use tokio::prelude::*;
 use tokio::runtime::Runtime;
-use tokio::timer::Delay;
 use tokio::timer::timeout::Error as TimeoutError;
+use tokio::timer::Delay;
+use tokio_zookeeper::{
+    KeeperState, WatchedEvent, WatchedEventType, ZooKeeper, ZooKeeperBuilder,
+};
 use url::Url;
 
-use cueball::backend::{
-    self,
-    BackendAddress,
-    BackendKey,
-    Backend,
-};
+use cueball::backend::{self, Backend, BackendAddress, BackendKey};
 use cueball::resolver::{
-    BackendAddedMsg,
-    BackendRemovedMsg,
-    BackendMsg,
-    Resolver
+    BackendAddedMsg, BackendMsg, BackendRemovedMsg, Resolver,
 };
 
 pub mod common;
@@ -119,7 +98,7 @@ enum ResolverError {
     InvalidZkJson,
     InvalidZkData(ZkDataField),
     MissingZkData(ZkDataField),
-    ConnectionPoolShutdown
+    ConnectionPoolShutdown,
 }
 
 impl ResolverError {
@@ -130,7 +109,7 @@ impl ResolverError {
     fn should_stop(&self) -> bool {
         match self {
             ResolverError::ConnectionPoolShutdown => true,
-            _ => false
+            _ => false,
         }
     }
 }
@@ -139,13 +118,13 @@ impl ResolverError {
 enum ZkDataField {
     Ip,
     Port,
-    PostgresUrl
+    PostgresUrl,
 }
 
 #[derive(Debug)]
 pub enum ZkConnectStringError {
     EmptyString,
-    MalformedAddr
+    MalformedAddr,
 }
 
 impl From<AddrParseError> for ZkConnectStringError {
@@ -172,8 +151,7 @@ impl ZkConnectString {
 
 impl ToString for ZkConnectString {
     fn to_string(&self) -> String {
-        self
-            .0
+        self.0
             .iter()
             .map(|x| x.to_string())
             .intersperse(String::from(","))
@@ -191,15 +169,13 @@ impl FromStr for ZkConnectString {
         let acc: Result<Vec<SocketAddr>, Self::Err> = Ok(vec![]);
         s.split(',')
             .map(|x| SocketAddr::from_str(x))
-            .fold(acc, |acc, x| {
-                match (acc, x) {
-                    (Ok(mut addrs), Ok(addr)) => {
-                        addrs.push(addr);
-                        Ok(addrs)
-                    },
-                    (Err(e), _) => Err(e),
-                    (_, Err(e)) => Err(ZkConnectStringError::from(e))
+            .fold(acc, |acc, x| match (acc, x) {
+                (Ok(mut addrs), Ok(addr)) => {
+                    addrs.push(addr);
+                    Ok(addrs)
                 }
+                (Err(e), _) => Err(e),
+                (_, Err(e)) => Err(ZkConnectStringError::from(e)),
             })
             .and_then(|x| Ok(ZkConnectString(x)))
     }
@@ -210,12 +186,18 @@ impl FromStr for ZkConnectString {
 /// implements Debug and uses the Debug representation of the type as the
 /// serialized output.
 ///
-struct LogItem<T>(T) where T: Debug;
+struct LogItem<T>(T)
+where
+    T: Debug;
 
 impl<T: Debug> SlogValue for LogItem<T> {
-    fn serialize(&self, _rec: &Record, key: Key,
-        serializer: &mut dyn Serializer) -> SlogResult {
-            serializer.emit_str(key, &format!("{:?}", self.0))
+    fn serialize(
+        &self,
+        _rec: &Record,
+        key: Key,
+        serializer: &mut dyn Serializer,
+    ) -> SlogResult {
+        serializer.emit_str(key, &format!("{:?}", self.0))
     }
 }
 
@@ -234,10 +216,9 @@ enum NextAction {
 // to the next iteration.
 //
 struct WatchLoopState {
-    watcher: Box<dyn Stream
-        <Item = WatchedEvent, Error = ()> + Send>,
+    watcher: Box<dyn Stream<Item = WatchedEvent, Error = ()> + Send>,
     curr_event: WatchedEvent,
-    delay: Duration
+    delay: Duration,
 }
 
 #[derive(Debug)]
@@ -266,7 +247,7 @@ pub struct ManateePrimaryResolver {
     ///
     /// The ManateePrimaryResolver's root log
     ///
-    log: Logger
+    log: Logger,
 }
 
 impl ManateePrimaryResolver {
@@ -283,9 +264,8 @@ impl ManateePrimaryResolver {
     pub fn new(
         connect_string: ZkConnectString,
         path: String,
-        log: Option<Logger>
-    ) -> Self
-    {
+        log: Option<Logger>,
+    ) -> Self {
         let cluster_state_path = [&path, "/state"].concat();
 
         //
@@ -293,11 +273,15 @@ impl ManateePrimaryResolver {
         // the caller did not pass one in
         //
         let log = log.unwrap_or_else(|| {
-            Logger::root(Mutex::new(LevelFilter::new(
-                slog_bunyan::with_name(crate_name!(),
-                    std::io::stdout()).build(),
-                slog::Level::Info)).fuse(),
-                o!("build-id" => crate_version!()))
+            Logger::root(
+                Mutex::new(LevelFilter::new(
+                    slog_bunyan::with_name(crate_name!(), std::io::stdout())
+                        .build(),
+                    slog::Level::Info,
+                ))
+                .fuse(),
+                o!("build-id" => crate_version!()),
+            )
         });
 
         ManateePrimaryResolver {
@@ -305,7 +289,7 @@ impl ManateePrimaryResolver {
             cluster_state_path,
             last_backend: Arc::new(Mutex::new(None)),
             is_running: false,
-            log
+            log,
         }
     }
 }
@@ -364,7 +348,7 @@ fn process_value(
     pool_tx: &Sender<BackendMsg>,
     new_value: &[u8],
     last_backend: Arc<Mutex<Option<BackendKey>>>,
-    log: Logger
+    log: Logger,
 ) -> Result<(), ResolverError> {
     debug!(log, "process_value() entered");
 
@@ -381,17 +365,15 @@ fn process_value(
     // if they don't, or if they are of the wrong type.
     //
     let ip = match &v["primary"]["ip"] {
-        SerdeJsonValue::String(s) => {
-            match BackendAddress::from_str(s) {
-                Ok(s) => s,
-                Err(_) => {
-                    return Err(ResolverError::InvalidZkData(ZkDataField::Ip));
-                }
+        SerdeJsonValue::String(s) => match BackendAddress::from_str(s) {
+            Ok(s) => s,
+            Err(_) => {
+                return Err(ResolverError::InvalidZkData(ZkDataField::Ip));
             }
         },
         SerdeJsonValue::Null => {
             return Err(ResolverError::MissingZkData(ZkDataField::Ip));
-        },
+        }
         _ => {
             return Err(ResolverError::InvalidZkData(ZkDataField::Ip));
         }
@@ -402,26 +384,22 @@ fn process_value(
     // error if they don't, or if they are of the wrong type.
     //
     let port = match &v["primary"]["pgUrl"] {
-        SerdeJsonValue::String(s) => {
-            match Url::parse(s) {
-                Ok(url) => {
-                    match url.port() {
-                        Some(port) => port,
-                        None => {
-                            return Err(ResolverError::MissingZkData(
-                                ZkDataField::Port));
-                        }
-                    }
-                },
-                Err(_) => {
-                    return Err(ResolverError::InvalidZkData(
-                        ZkDataField::PostgresUrl))
+        SerdeJsonValue::String(s) => match Url::parse(s) {
+            Ok(url) => match url.port() {
+                Some(port) => port,
+                None => {
+                    return Err(ResolverError::MissingZkData(ZkDataField::Port));
                 }
+            },
+            Err(_) => {
+                return Err(ResolverError::InvalidZkData(
+                    ZkDataField::PostgresUrl,
+                ));
             }
         },
         SerdeJsonValue::Null => {
             return Err(ResolverError::MissingZkData(ZkDataField::PostgresUrl));
-        },
+        }
         _ => {
             return Err(ResolverError::InvalidZkData(ZkDataField::PostgresUrl));
         }
@@ -442,10 +420,13 @@ fn process_value(
     if should_send {
         info!(log, "New backend found; sending to connection pool";
             "backend" => LogItem(backend.clone()));
-        if pool_tx.send(BackendMsg::AddedMsg(BackendAddedMsg {
-            key: backend_key.clone(),
-            backend
-        })).is_err() {
+        if pool_tx
+            .send(BackendMsg::AddedMsg(BackendAddedMsg {
+                key: backend_key.clone(),
+                backend,
+            }))
+            .is_err()
+        {
             return Err(ResolverError::ConnectionPoolShutdown);
         }
 
@@ -458,8 +439,10 @@ fn process_value(
         //
         if let Some(lbc) = lb_clone {
             info!(log, "Notifying connection pool of removal of old backend");
-            if pool_tx.send(BackendMsg::RemovedMsg(
-                BackendRemovedMsg(lbc))).is_err() {
+            if pool_tx
+                .send(BackendMsg::RemovedMsg(BackendRemovedMsg(lbc)))
+                .is_err()
+            {
                 return Err(ResolverError::ConnectionPoolShutdown);
             }
         }
@@ -497,10 +480,9 @@ fn watch_loop(
     cluster_state_path: String,
     zk: ZooKeeper,
     loop_state: WatchLoopState,
-    log: Logger
-) -> impl Future<Item = Loop<NextAction, WatchLoopState>,
-    Error = FailureError> + Send {
-
+    log: Logger,
+) -> impl Future<Item = Loop<NextAction, WatchLoopState>, Error = FailureError> + Send
+{
     let watcher = loop_state.watcher;
     let curr_event = loop_state.curr_event;
     let delay = loop_state.delay;
@@ -526,8 +508,8 @@ fn watch_loop(
     // happen infrequently.
     //
     Delay::new(Instant::now() + delay)
-    .and_then(move |_| {
-        zk
+        .and_then(move |_| {
+            zk
         .watch()
         .get_data(&cluster_state_path)
         .and_then(move |(_, data)| {
@@ -671,8 +653,8 @@ fn watch_loop(
             error!(oe_log, "Error getting data"; "error" => LogItem(error));
             ok(Loop::Break(NextAction::Reconnect(RECONNECT_NODELAY)))
         })
-    })
-    .map_err(|e| panic!("delay errored; err: {:?}", e))
+        })
+        .map_err(|e| panic!("delay errored; err: {:?}", e))
 }
 
 fn connect_loop(
@@ -681,100 +663,104 @@ fn connect_loop(
     connect_string: ZkConnectString,
     cluster_state_path: String,
     delay: Duration,
-    log: Logger
-) -> impl Future<Item = Loop<(), Duration>,
-    Error = ()> + Send {
-
+    log: Logger,
+) -> impl Future<Item = Loop<(), Duration>, Error = ()> + Send {
     let oe_log = log.clone();
 
     Delay::new(Instant::now() + delay)
-    .and_then(move |_| {
-        info!(log, "Connecting to ZooKeeper cluster");
+        .and_then(move |_| {
+            info!(log, "Connecting to ZooKeeper cluster");
 
-        let mut builder = ZooKeeperBuilder::default();
-        builder.set_timeout(SESSION_TIMEOUT);
-        builder.set_logger(log.new(o!(
-            "component" => "zookeeper"
-        )));
-
-        //
-        // We expect() the result of get_addr_at() because we anticipate the
-        // connect string having at least one element, and we can't do anything
-        // useful if it doesn't.
-        //
-        builder.connect(connect_string.get_addr_at(0)
-            .expect("connect_string should have at least one IP address"))
-        .timeout(TCP_CONNECT_TIMEOUT)
-        .and_then(move |(zk, default_watcher)| {
-            info!(log, "Connected to ZooKeeper cluster");
+            let mut builder = ZooKeeperBuilder::default();
+            builder.set_timeout(SESSION_TIMEOUT);
+            builder.set_logger(log.new(o!(
+                "component" => "zookeeper"
+            )));
 
             //
-            // Main change-watching loop. A new loop iteration means we're
-            // setting a new watch (if necessary) and waiting for a result.
-            // Breaking from the loop means that we've hit some error and are
-            // returning control to the outer loop.
+            // We expect() the result of get_addr_at() because we anticipate the
+            // connect string having at least one element, and we can't do anything
+            // useful if it doesn't.
             //
-            // Arg: WatchLoopState -- we set curr_event to an artificially
-            //     constructed WatchedEvent for the first loop iteration, so the
-            //     connection pool will be initialized with the initial primary
-            //     as its backend.
-            // Loop::Break type: NextAction -- this value is used to instruct
-            //     the outer loop (this function) whether to try to reconnect or
-            //     terminate.
-            //
-            loop_fn(WatchLoopState {
-                watcher: Box::new(default_watcher),
-                curr_event: mock_event(),
-                delay: WATCH_LOOP_NODELAY
-            } , move |loop_state| {
-                //
-                // These fields require a new clone for every loop iteration,
-                // but they don't actually change from iteration to iteration,
-                // so they're not included as part of loop_state.
-                //
-                let pool_tx = pool_tx.clone();
-                let last_backend = Arc::clone(&last_backend);
-                let cluster_state_path = cluster_state_path.clone();
-                let zk = zk.clone();
-                let log = log.clone();
+            builder
+                .connect(connect_string.get_addr_at(0).expect(
+                    "connect_string should have at least one IP address",
+                ))
+                .timeout(TCP_CONNECT_TIMEOUT)
+                .and_then(move |(zk, default_watcher)| {
+                    info!(log, "Connected to ZooKeeper cluster");
 
-                watch_loop(
-                    pool_tx,
-                    last_backend,
-                    cluster_state_path,
-                    zk,
-                    loop_state,
-                    log
-                )
-                .map_err(TimeoutError::inner)
-            })
-            .and_then(|next_action| {
-                ok(match next_action {
-                    NextAction::Stop => Loop::Break(()),
                     //
-                    // We reconnect immediately here instead of waiting, because
-                    // if we're here it means that we came from the inner loop
-                    // and thus we just had a valid connection terminate (as
-                    // opposed to the `or_else` block below, were we've just
-                    // tried to connect and failed), and thus there's no reason
-                    // for us to delay trying to connect again.
+                    // Main change-watching loop. A new loop iteration means we're
+                    // setting a new watch (if necessary) and waiting for a result.
+                    // Breaking from the loop means that we've hit some error and are
+                    // returning control to the outer loop.
                     //
-                    NextAction::Reconnect(delay) => Loop::Continue(delay)
+                    // Arg: WatchLoopState -- we set curr_event to an artificially
+                    //     constructed WatchedEvent for the first loop iteration, so the
+                    //     connection pool will be initialized with the initial primary
+                    //     as its backend.
+                    // Loop::Break type: NextAction -- this value is used to instruct
+                    //     the outer loop (this function) whether to try to reconnect or
+                    //     terminate.
+                    //
+                    loop_fn(
+                        WatchLoopState {
+                            watcher: Box::new(default_watcher),
+                            curr_event: mock_event(),
+                            delay: WATCH_LOOP_NODELAY,
+                        },
+                        move |loop_state| {
+                            //
+                            // These fields require a new clone for every loop iteration,
+                            // but they don't actually change from iteration to iteration,
+                            // so they're not included as part of loop_state.
+                            //
+                            let pool_tx = pool_tx.clone();
+                            let last_backend = Arc::clone(&last_backend);
+                            let cluster_state_path = cluster_state_path.clone();
+                            let zk = zk.clone();
+                            let log = log.clone();
+
+                            watch_loop(
+                                pool_tx,
+                                last_backend,
+                                cluster_state_path,
+                                zk,
+                                loop_state,
+                                log,
+                            )
+                            .map_err(TimeoutError::inner)
+                        },
+                    )
+                    .and_then(|next_action| {
+                        ok(match next_action {
+                            NextAction::Stop => Loop::Break(()),
+                            //
+                            // We reconnect immediately here instead of waiting, because
+                            // if we're here it means that we came from the inner loop
+                            // and thus we just had a valid connection terminate (as
+                            // opposed to the `or_else` block below, were we've just
+                            // tried to connect and failed), and thus there's no reason
+                            // for us to delay trying to connect again.
+                            //
+                            NextAction::Reconnect(delay) => {
+                                Loop::Continue(delay)
+                            }
+                        })
+                    })
                 })
-            })
-        })
-        .or_else(move |error| {
-            error!(oe_log, "Error connecting to ZooKeeper cluster";
+                .or_else(move |error| {
+                    error!(oe_log, "Error connecting to ZooKeeper cluster";
                 "error" => LogItem(error));
 
-            ok(Loop::Continue(RECONNECT_DELAY))
+                    ok(Loop::Continue(RECONNECT_DELAY))
+                })
         })
-    })
-    .map_err(|e| panic!("delay errored; err: {:?}", e))
+        .map_err(|e| panic!("delay errored; err: {:?}", e))
 }
 
 impl Resolver for ManateePrimaryResolver {
-
     //
     // The resolver object is not Sync, so we can assume that only one instance
     // of this function is running at once, because callers will have to control
@@ -860,9 +846,10 @@ impl Resolver for ManateePrimaryResolver {
                     connect_string,
                     cluster_state_path,
                     delay,
-                    log
+                    log,
                 )
-            }).and_then(move |_| {
+            })
+            .and_then(move |_| {
                 info!(at_log, "Event-processing task stopping");
                 exited_clone.store(true, Ordering::Relaxed);
                 Ok(())
@@ -870,7 +857,7 @@ impl Resolver for ManateePrimaryResolver {
             .map(|_| ())
             .map_err(|_| {
                 unreachable!("connect_loop() should never return an error")
-            })
+            }),
         );
 
         //
@@ -879,8 +866,10 @@ impl Resolver for ManateePrimaryResolver {
         //
         loop {
             if exited.load(Ordering::Relaxed) {
-                info!(self.log,
-                    "event-processing task exited; stopping heartbeats");
+                info!(
+                    self.log,
+                    "event-processing task exited; stopping heartbeats"
+                );
                 break;
             }
             if s.send(BackendMsg::HeartbeatMsg).is_err() {
@@ -917,13 +906,13 @@ mod test {
     use super::*;
 
     use std::iter;
-    use std::sync::{Arc, Mutex};
     use std::sync::mpsc::{channel, TryRecvError};
+    use std::sync::{Arc, Mutex};
     use std::vec::Vec;
 
     use quickcheck::{quickcheck, Arbitrary, Gen};
 
-    use common::{util, test_data};
+    use common::{test_data, util};
 
     impl Arbitrary for ZkConnectString {
         fn arbitrary<G: Gen>(g: &mut G) -> Self {
@@ -932,7 +921,7 @@ mod test {
                 iter::repeat(())
                     .map(|()| SocketAddr::arbitrary(g))
                     .take(size)
-                    .collect()
+                    .collect(),
             )
         }
     }
@@ -966,7 +955,7 @@ mod test {
         last_backend: BackendKey,
         expected_error: Option<ResolverError>,
         added_backend: Option<BackendAddedMsg>,
-        removed_backend: Option<BackendRemovedMsg>
+        removed_backend: Option<BackendRemovedMsg>,
     }
 
     //
@@ -980,12 +969,11 @@ mod test {
             &tx.clone(),
             &input.value,
             last_backend,
-            util::log_from_env(util::DEFAULT_LOG_LEVEL).unwrap());
+            util::log_from_env(util::DEFAULT_LOG_LEVEL).unwrap(),
+        );
         match input.expected_error {
             None => assert_eq!(result, Ok(())),
-            Some(expected_error) => {
-                assert_eq!(result, Err(expected_error))
-            }
+            Some(expected_error) => assert_eq!(result, Err(expected_error)),
         }
 
         let mut received_messages = Vec::new();
@@ -1005,8 +993,11 @@ mod test {
         for i in 0..expected_message_count {
             let channel_result = rx.try_recv();
             match channel_result {
-                Err(e) => panic!("Unexpected error receiving on channel: {:?} \
-                    -- Loop iteration: {:?}", e, i),
+                Err(e) => panic!(
+                    "Unexpected error receiving on channel: {:?} \
+                     -- Loop iteration: {:?}",
+                    e, i
+                ),
                 Ok(result) => {
                     received_messages.push(result);
                 }
@@ -1019,7 +1010,7 @@ mod test {
         //
         match rx.try_recv() {
             Err(TryRecvError::Empty) => (),
-            _ => panic!("Unexpected message on resolver channel")
+            _ => panic!("Unexpected message on resolver channel"),
         }
 
         // Check that the "added" message was received if applicable
@@ -1038,8 +1029,9 @@ mod test {
         if let Some(msg) = input.removed_backend {
             let msg = BackendMsg::RemovedMsg(msg);
             match util::find_msg_match(&received_messages, &msg) {
-                None =>
-                    panic!("removed_backend not found in received messages"),
+                None => {
+                    panic!("removed_backend not found in received messages")
+                }
                 Some(index) => {
                     received_messages.remove(index);
                     ()
@@ -1053,12 +1045,12 @@ mod test {
         let data_1 = test_data::backend_ip1_port1();
         let data_2 = test_data::backend_ip2_port2();
 
-        run_process_value_fields(ProcessValueFields{
+        run_process_value_fields(ProcessValueFields {
             value: data_2.raw_vec(),
             last_backend: data_1.key(),
             expected_error: None,
             added_backend: Some(data_2.added_msg()),
-            removed_backend: Some(data_1.removed_msg())
+            removed_backend: Some(data_1.removed_msg()),
         });
     }
 
@@ -1067,12 +1059,12 @@ mod test {
         let data_1 = test_data::backend_ip1_port1();
         let data_2 = test_data::backend_ip2_port1();
 
-        run_process_value_fields(ProcessValueFields{
+        run_process_value_fields(ProcessValueFields {
             value: data_2.raw_vec(),
             last_backend: data_1.key(),
             expected_error: None,
             added_backend: Some(data_2.added_msg()),
-            removed_backend: Some(data_1.removed_msg())
+            removed_backend: Some(data_1.removed_msg()),
         });
     }
 
@@ -1081,12 +1073,12 @@ mod test {
         let data_1 = test_data::backend_ip1_port1();
         let data_2 = test_data::backend_ip1_port2();
 
-        run_process_value_fields(ProcessValueFields{
+        run_process_value_fields(ProcessValueFields {
             value: data_2.raw_vec(),
             last_backend: data_1.key(),
             expected_error: None,
             added_backend: Some(data_2.added_msg()),
-            removed_backend: Some(data_1.removed_msg())
+            removed_backend: Some(data_1.removed_msg()),
         });
     }
 
@@ -1094,12 +1086,12 @@ mod test {
     fn process_value_test_no_change() {
         let data = test_data::backend_ip1_port1();
 
-        run_process_value_fields(ProcessValueFields{
+        run_process_value_fields(ProcessValueFields {
             value: data.raw_vec(),
             last_backend: data.key(),
             expected_error: None,
             added_backend: None,
-            removed_backend: None
+            removed_backend: None,
         });
     }
 
@@ -1107,12 +1099,12 @@ mod test {
     fn process_value_test_no_ip() {
         let filler = test_data::backend_ip1_port1();
 
-        run_process_value_fields(ProcessValueFields{
+        run_process_value_fields(ProcessValueFields {
             value: test_data::no_ip_vec(),
             last_backend: filler.key(),
             expected_error: Some(ResolverError::MissingZkData(ZkDataField::Ip)),
             added_backend: None,
-            removed_backend: None
+            removed_backend: None,
         });
     }
 
@@ -1120,12 +1112,12 @@ mod test {
     fn process_value_test_wrong_type_ip() {
         let filler = test_data::backend_ip1_port1();
 
-        run_process_value_fields(ProcessValueFields{
+        run_process_value_fields(ProcessValueFields {
             value: test_data::wrong_type_ip_vec(),
             last_backend: filler.key(),
             expected_error: Some(ResolverError::InvalidZkData(ZkDataField::Ip)),
             added_backend: None,
-            removed_backend: None
+            removed_backend: None,
         });
     }
 
@@ -1133,12 +1125,12 @@ mod test {
     fn process_value_test_invalid_ip() {
         let filler = test_data::backend_ip1_port1();
 
-        run_process_value_fields(ProcessValueFields{
+        run_process_value_fields(ProcessValueFields {
             value: test_data::invalid_ip_vec(),
             last_backend: filler.key(),
             expected_error: Some(ResolverError::InvalidZkData(ZkDataField::Ip)),
             added_backend: None,
-            removed_backend: None
+            removed_backend: None,
         });
     }
 
@@ -1146,13 +1138,14 @@ mod test {
     fn process_value_test_no_pg_url() {
         let filler = test_data::backend_ip1_port1();
 
-        run_process_value_fields(ProcessValueFields{
+        run_process_value_fields(ProcessValueFields {
             value: test_data::no_pg_url_vec(),
             last_backend: filler.key(),
             expected_error: Some(ResolverError::MissingZkData(
-                ZkDataField::PostgresUrl)),
+                ZkDataField::PostgresUrl,
+            )),
             added_backend: None,
-            removed_backend: None
+            removed_backend: None,
         });
     }
 
@@ -1160,13 +1153,14 @@ mod test {
     fn process_value_test_wrong_type_pg_url() {
         let filler = test_data::backend_ip1_port1();
 
-        run_process_value_fields(ProcessValueFields{
+        run_process_value_fields(ProcessValueFields {
             value: test_data::wrong_type_pg_url_vec(),
             last_backend: filler.key(),
             expected_error: Some(ResolverError::InvalidZkData(
-                ZkDataField::PostgresUrl)),
+                ZkDataField::PostgresUrl,
+            )),
             added_backend: None,
-            removed_backend: None
+            removed_backend: None,
         });
     }
 
@@ -1174,13 +1168,14 @@ mod test {
     fn process_value_test_invalid_pg_url() {
         let filler = test_data::backend_ip1_port1();
 
-        run_process_value_fields(ProcessValueFields{
+        run_process_value_fields(ProcessValueFields {
             value: test_data::invalid_pg_url_vec(),
             last_backend: filler.key(),
             expected_error: Some(ResolverError::InvalidZkData(
-                ZkDataField::PostgresUrl)),
+                ZkDataField::PostgresUrl,
+            )),
             added_backend: None,
-            removed_backend: None
+            removed_backend: None,
         });
     }
 
@@ -1188,13 +1183,14 @@ mod test {
     fn process_value_test_no_port_pg_url() {
         let filler = test_data::backend_ip1_port1();
 
-        run_process_value_fields(ProcessValueFields{
+        run_process_value_fields(ProcessValueFields {
             value: test_data::no_port_pg_url_vec(),
             last_backend: filler.key(),
             expected_error: Some(ResolverError::MissingZkData(
-                ZkDataField::Port)),
+                ZkDataField::Port,
+            )),
             added_backend: None,
-            removed_backend: None
+            removed_backend: None,
         });
     }
 
@@ -1202,12 +1198,12 @@ mod test {
     fn process_value_test_invalid_json() {
         let filler = test_data::backend_ip1_port1();
 
-        run_process_value_fields(ProcessValueFields{
+        run_process_value_fields(ProcessValueFields {
             value: test_data::invalid_json_vec(),
             last_backend: filler.key(),
             expected_error: Some(ResolverError::InvalidZkJson),
             added_backend: None,
-            removed_backend: None
+            removed_backend: None,
         });
     }
- }
+}

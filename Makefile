@@ -1,5 +1,5 @@
 #
-# Copyright 2019 Joyent, Inc
+# Copyright 2020 Joyent, Inc
 #
 
 #
@@ -9,6 +9,7 @@
 NAME = rust-cueball
 CARGO ?= cargo
 RUST_CLIPPY_ARGS ?= -- -D clippy::all
+RUSTFMT_ARGS ?= -- --check
 
 #
 # Repo-specific targets
@@ -31,3 +32,7 @@ test-unit:
 .PHONY: check
 check:
 	$(CARGO) clean && $(CARGO) clippy $(RUST_CLIPPY_ARGS)
+
+.PHONY: fmtcheck
+fmtcheck:
+	$(CARGO) fmt $(RUSTFMT_ARGS)

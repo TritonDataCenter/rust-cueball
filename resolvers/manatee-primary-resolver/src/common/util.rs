@@ -8,37 +8,27 @@ use std::env;
 use std::io::Error as StdIoError;
 use std::process::Command;
 use std::str::FromStr;
-use std::sync::Mutex;
 use std::sync::mpsc::{
-    Receiver,
-    RecvError,
-    RecvTimeoutError,
-    TryRecvError,
-    channel
+    channel, Receiver, RecvError, RecvTimeoutError, TryRecvError,
 };
+use std::sync::Mutex;
 use std::thread;
 use std::time::{Duration, Instant};
 
 use clap::{crate_name, crate_version};
 use cueball::resolver::{
-    BackendAddedMsg,
-    BackendRemovedMsg,
-    BackendMsg,
-    Resolver
+    BackendAddedMsg, BackendMsg, BackendRemovedMsg, Resolver,
 };
 use failure::Error as FailureError;
-use slog::{Drain, Level, LevelFilter, Logger, o};
+use slog::{o, Drain, Level, LevelFilter, Logger};
 use tokio::prelude::*;
 use tokio::runtime::Runtime;
-use tokio_zookeeper::{Acl, CreateMode, ZooKeeper};
 use tokio_zookeeper::error as tokio_zk_error;
+use tokio_zookeeper::{Acl, CreateMode, ZooKeeper};
 use uuid::Uuid;
 
-use crate::{
-    ManateePrimaryResolver,
-    ZkConnectString
-};
 use super::test_data;
+use crate::{ManateePrimaryResolver, ZkConnectString};
 
 pub const DEFAULT_LOG_LEVEL: Level = Level::Info;
 pub const LOG_LEVEL_ENV_VAR: &str = "RESOLVER_LOG_LEVEL";
@@ -47,11 +37,10 @@ pub const RESOLVER_STARTUP_DELAY: Duration = Duration::from_secs(1);
 pub const STANDARD_RECV_TIMEOUT: Duration = Duration::from_secs(1);
 pub const SLACK_DURATION: Duration = Duration::from_millis(10);
 
-
 #[derive(Debug, PartialEq)]
 pub enum ZkStatus {
     Enabled,
-    Disabled
+    Disabled,
 }
 
 #[derive(Debug)]
@@ -65,7 +54,7 @@ pub enum TestError {
     SubprocessError(String),
     IncorrectBehavior(String),
     InvalidLogLevel,
-    UnspecifiedError
+    UnspecifiedError,
 }
 
 impl From<RecvTimeoutError> for TestError {
@@ -134,19 +123,16 @@ pub struct TestContext {
 
 impl Default for TestContext {
     fn default() -> Self {
-        let connect_string = ZkConnectString::from_str(
-             "127.0.0.1:2181").unwrap();
+        let connect_string =
+            ZkConnectString::from_str("127.0.0.1:2181").unwrap();
         let root_path = "/test-".to_string() + &Uuid::new_v4().to_string();
         TestContext::new(connect_string, root_path)
     }
 }
 
-impl TestContext{
-    pub fn new(
-        connect_string: ZkConnectString,
-        root_path: String
-    ) -> Self {
-        TestContext{
+impl TestContext {
+    pub fn new(connect_string: ZkConnectString, root_path: String) -> Self {
+        TestContext {
             connect_string,
             root_path,
             rt: Runtime::new().expect("Error creating tokio runtime"),
@@ -179,52 +165,58 @@ impl TestContext{
     // This function should be called exactly once, at the end of the test. It
     // consumes the TestContext.
     //
-    fn finalize(self) -> Result<(), TestError>{
+    fn finalize(self) -> Result<(), TestError> {
         // Wait for the futures to resolve
         self.rt.shutdown_on_idle().wait()?;
         Ok(())
     }
 
-    fn create_zk_node(&mut self, path: String, data: Vec<u8>)
-        -> Result<(), TestError> {
+    fn create_zk_node(
+        &mut self,
+        path: String,
+        data: Vec<u8>,
+    ) -> Result<(), TestError> {
         self.rt.block_on(
-            ZooKeeper::connect(self.connect_string.get_addr_at(0)
-                .expect("Empty connect string"))
+            ZooKeeper::connect(
+                self.connect_string
+                    .get_addr_at(0)
+                    .expect("Empty connect string"),
+            )
             .and_then(move |(zk, _)| {
                 zk.create(
                     &path,
                     data,
                     Acl::open_unsafe(),
-                    CreateMode::Persistent
-                ).map(|(_, res)| res)
-            })
-        //
-        // A double question mark! The first one unwraps the error
-        // returned by ZooKeeper::connect; the second one unwraps the error
-        // returned by create().
-        //
+                    CreateMode::Persistent,
+                )
+                .map(|(_, res)| res)
+            }), //
+                // A double question mark! The first one unwraps the error
+                // returned by ZooKeeper::connect; the second one unwraps the error
+                // returned by create().
+                //
         )??;
         Ok(())
     }
 
-    fn set_zk_data(&mut self, path: String, data: Vec<u8>)
-        -> Result<(), TestError> {
-
+    fn set_zk_data(
+        &mut self,
+        path: String,
+        data: Vec<u8>,
+    ) -> Result<(), TestError> {
         self.rt.block_on(
-            ZooKeeper::connect(self.connect_string.get_addr_at(0)
-                .expect("Empty connect string"))
+            ZooKeeper::connect(
+                self.connect_string
+                    .get_addr_at(0)
+                    .expect("Empty connect string"),
+            )
             .and_then(move |(zk, _)| {
-                zk.set_data(
-                    &path,
-                    None,
-                    data
-                ).map(|(_, res)| res)
-            })
-        //
-        // Another double question mark! The first one unwraps the error
-        // returned by ZooKeeper::connect; the second one unwraps the error
-        // returned by set_data().
-        //
+                zk.set_data(&path, None, data).map(|(_, res)| res)
+            }), //
+                // Another double question mark! The first one unwraps the error
+                // returned by ZooKeeper::connect; the second one unwraps the error
+                // returned by set_data().
+                //
         )??;
 
         Ok(())
@@ -232,14 +224,14 @@ impl TestContext{
 
     fn delete_zk_node(&mut self, path: String) -> Result<(), TestError> {
         self.rt.block_on(
-            ZooKeeper::connect(self.connect_string.get_addr_at(0)
-                .expect("Empty connect string"))
+            ZooKeeper::connect(
+                self.connect_string
+                    .get_addr_at(0)
+                    .expect("Empty connect string"),
+            )
             .and_then(move |(zk, _)| {
-                zk.delete(
-                    &path,
-                    None
-                ).map(|(_, res)| res)
-            })
+                zk.delete(&path, None).map(|(_, res)| res)
+            }),
         )??;
         //
         // Another double question mark! The first one unwraps the error
@@ -262,7 +254,7 @@ impl TestContext{
     pub fn run_test_case(
         &mut self,
         input: TestAction,
-        external_rx: Option<&Receiver<BackendMsg>>
+        external_rx: Option<&Receiver<BackendMsg>>,
     ) -> Result<(), TestError> {
         let data_path_start = self.root_path.clone() + "/state";
         let data_path_end = self.root_path.clone() + "/state";
@@ -288,7 +280,10 @@ impl TestContext{
                 let log = log_from_env(DEFAULT_LOG_LEVEL)?;
                 thread::spawn(move || {
                     let mut resolver = ManateePrimaryResolver::new(
-                        connect_string, root_path_resolver, Some(log));
+                        connect_string,
+                        root_path_resolver,
+                        Some(log),
+                    );
                     resolver.run(tx);
                 });
                 &rx
@@ -339,7 +334,7 @@ impl TestContext{
         match recv_timeout_discard_heartbeats(rx, STANDARD_RECV_TIMEOUT) {
             Err(TestError::RecvTimeout) => (),
             Err(e) => return Err(e),
-            _ => return Err(TestError::UnexpectedMessage)
+            _ => return Err(TestError::UnexpectedMessage),
         }
 
         // Verify that the expected messages were received. Right now, we
@@ -352,9 +347,12 @@ impl TestContext{
         if let Some(msg) = input.added_backend {
             let msg = BackendMsg::AddedMsg(msg);
             match find_msg_match(&received_messages, &msg) {
-                None => return Err(TestError::BackendMismatch(
-                    "added_backend not found in received messages"
-                    .to_string())),
+                None => {
+                    return Err(TestError::BackendMismatch(
+                        "added_backend not found in received messages"
+                            .to_string(),
+                    ));
+                }
                 Some(index) => {
                     received_messages.remove(index);
                 }
@@ -363,9 +361,12 @@ impl TestContext{
         if let Some(msg) = input.removed_backend {
             let msg = BackendMsg::RemovedMsg(msg);
             match find_msg_match(&received_messages, &msg) {
-                None => return Err(TestError::BackendMismatch(
-                    "removed_backend not found in received messages"
-                    .to_string())),
+                None => {
+                    return Err(TestError::BackendMismatch(
+                        "removed_backend not found in received messages"
+                            .to_string(),
+                    ));
+                }
                 Some(index) => {
                     received_messages.remove(index);
                 }
@@ -388,9 +389,10 @@ impl TestContext{
     // must be taken to account for this behavior when using the channel in code
     // that precedes the invocation of this function.
     //
-    pub fn resolver_connected(&mut self, rx: &Receiver<BackendMsg>)
-        -> Result<bool, TestError> {
-
+    pub fn resolver_connected(
+        &mut self,
+        rx: &Receiver<BackendMsg>,
+    ) -> Result<bool, TestError> {
         let data_path = self.root_path.clone() + "/state";
         let data_path_clone = data_path.clone();
 
@@ -406,8 +408,10 @@ impl TestContext{
         // you extract any structured information that we can compare to a known
         // entity.
         //
-        if self.set_zk_data(data_path, test_data::backend_ip1_port1().raw_vec())
-            .is_err() {
+        if self
+            .set_zk_data(data_path, test_data::backend_ip1_port1().raw_vec())
+            .is_err()
+        {
             return Ok(false);
         }
 
@@ -422,8 +426,10 @@ impl TestContext{
         // succeeded, which means that zookeeper is running. Thus, we return
         // various errors below if the observed behavior doesn't make sense.
         //
-        self.set_zk_data(data_path_clone, test_data::backend_ip2_port2()
-            .raw_vec())?;
+        self.set_zk_data(
+            data_path_clone,
+            test_data::backend_ip2_port2().raw_vec(),
+        )?;
 
         let mut received_messages = Vec::new();
 
@@ -435,7 +441,7 @@ impl TestContext{
         match recv_timeout_discard_heartbeats(&rx, STANDARD_RECV_TIMEOUT) {
             Ok(m) => received_messages.push(m),
             Err(TestError::RecvTimeout) => return Ok(false),
-            Err(e) => return Err(e)
+            Err(e) => return Err(e),
         }
 
         //
@@ -445,30 +451,31 @@ impl TestContext{
         //
         match recv_timeout_discard_heartbeats(&rx, STANDARD_RECV_TIMEOUT) {
             Ok(m) => received_messages.push(m),
-            Err(e) => return Err(e)
+            Err(e) => return Err(e),
         }
 
         // Make sure there are no more messages waiting
         match recv_timeout_discard_heartbeats(&rx, STANDARD_RECV_TIMEOUT) {
             Err(TestError::RecvTimeout) => (),
             Err(e) => return Err(e),
-            _ => return Err(TestError::UnexpectedMessage)
+            _ => return Err(TestError::UnexpectedMessage),
         }
 
         //
         // We now know that we have two messages. If they don't match what we
         // expect, we return an UnexpectedMessage error.
         //
-        let msg = BackendMsg::RemovedMsg(test_data::backend_ip1_port1()
-            .removed_msg());
+        let msg = BackendMsg::RemovedMsg(
+            test_data::backend_ip1_port1().removed_msg(),
+        );
         match find_msg_match(&received_messages, &msg) {
             None => return Err(TestError::UnexpectedMessage),
             Some(index) => {
                 received_messages.remove(index);
             }
         }
-        let msg = BackendMsg::AddedMsg(test_data::backend_ip2_port2()
-            .added_msg());
+        let msg =
+            BackendMsg::AddedMsg(test_data::backend_ip2_port2().added_msg());
         match find_msg_match(&received_messages, &msg) {
             None => return Err(TestError::UnexpectedMessage),
             Some(index) => {
@@ -497,17 +504,16 @@ impl TestContext{
     // beginning and end of the test, respectively.
     //
     pub fn run_func_and_finalize<F>(mut self, func: F)
-        where F: FnOnce(&mut TestContext) -> Result<(), TestError>
+    where
+        F: FnOnce(&mut TestContext) -> Result<(), TestError>,
     {
         toggle_zookeeper(ZkStatus::Enabled)
             .expect("Failed to enable ZooKeeper");
-        self.setup_zk_nodes()
-            .expect("Failed to set up ZK nodes");
+        self.setup_zk_nodes().expect("Failed to set up ZK nodes");
         let result = func(&mut self);
         self.teardown_zk_nodes()
             .expect("Failed to tear down ZK nodes");
-        self.finalize()
-            .expect("Failed to shut down tokio runtime");
+        self.finalize().expect("Failed to shut down tokio runtime");
         //
         // The test might have turned ZooKeeper off and not turned it back on,
         // so we do that here.
@@ -530,7 +536,7 @@ pub fn toggle_zookeeper(status: ZkStatus) -> Result<(), TestError> {
 
     let arg = match status {
         ZkStatus::Enabled => "enable",
-        ZkStatus::Disabled => "disable"
+        ZkStatus::Disabled => "disable",
     };
 
     let status = Command::new(SVCADM_PATH)
@@ -542,7 +548,7 @@ pub fn toggle_zookeeper(status: ZkStatus) -> Result<(), TestError> {
     if !status.success() {
         let msg = match status.code() {
             Some(code) => format!("svcadm exited with status {}", code),
-            None => "svcadm killed by signal before finishing".to_string()
+            None => "svcadm killed by signal before finishing".to_string(),
         };
         return Err(TestError::SubprocessError(msg));
     }
@@ -554,9 +560,10 @@ pub fn toggle_zookeeper(status: ZkStatus) -> Result<(), TestError> {
 // Receives a message on the given channel using the given timeout, discarding
 // any heartbeat messages that come over the channel
 //
-fn recv_timeout_discard_heartbeats(rx: &Receiver<BackendMsg>, timeout: Duration)
-    -> Result<BackendMsg, TestError> {
-
+fn recv_timeout_discard_heartbeats(
+    rx: &Receiver<BackendMsg>,
+    timeout: Duration,
+) -> Result<BackendMsg, TestError> {
     let start_time = Instant::now();
 
     //
@@ -570,13 +577,11 @@ fn recv_timeout_discard_heartbeats(rx: &Receiver<BackendMsg>, timeout: Duration)
     // frequency, for use in the loop below.
     //
     let (failsafe_tx, failsafe_rx) = channel();
-    thread::spawn(move || {
-        loop {
-            if failsafe_tx.send(BackendMsg::HeartbeatMsg).is_err() {
-                break;
-            }
-            thread::sleep(GRANULARITY);
+    thread::spawn(move || loop {
+        if failsafe_tx.send(BackendMsg::HeartbeatMsg).is_err() {
+            break;
         }
+        thread::sleep(GRANULARITY);
     });
 
     //
@@ -592,12 +597,10 @@ fn recv_timeout_discard_heartbeats(rx: &Receiver<BackendMsg>, timeout: Duration)
         match rx.try_recv() {
             Err(TryRecvError::Empty) => (),
             Err(e) => return Err(TestError::from(e)),
-            Ok(msg) => {
-                match msg {
-                    BackendMsg::HeartbeatMsg => (),
-                    msg => return Ok(msg)
-                }
-            }
+            Ok(msg) => match msg {
+                BackendMsg::HeartbeatMsg => (),
+                msg => return Ok(msg),
+            },
         }
         failsafe_rx.recv()?;
     }
@@ -613,9 +616,9 @@ fn flush_channel(rx: &Receiver<BackendMsg>) -> Result<(), TestError> {
         match recv_timeout_discard_heartbeats(&rx, STANDARD_RECV_TIMEOUT) {
             Ok(_) => {
                 continue;
-            },
+            }
             Err(TestError::RecvTimeout) => return Ok(()),
-            Err(e) => return Err(e)
+            Err(e) => return Err(e),
         }
     }
 }
@@ -626,8 +629,10 @@ fn flush_channel(rx: &Receiver<BackendMsg>) -> Result<(), TestError> {
 /// return the index, rather than the item itself, to allow callers of the
 /// function to more easily manipulate the list afterward.
 ///
-pub fn find_msg_match(list: &[BackendMsg], to_find: &BackendMsg)
-    -> Option<usize> {
+pub fn find_msg_match(
+    list: &[BackendMsg],
+    to_find: &BackendMsg,
+) -> Option<usize> {
     for (index, item) in list.iter().enumerate() {
         if item == to_find {
             return Some(index);
@@ -648,29 +653,30 @@ pub struct TestAction {
     // The messages expected when transitioning from start_data to end_data
     //
     pub added_backend: Option<BackendAddedMsg>,
-    pub removed_backend: Option<BackendRemovedMsg>
+    pub removed_backend: Option<BackendRemovedMsg>,
 }
 
 pub fn parse_log_level(s: String) -> Result<Level, TestError> {
     match s.to_lowercase().as_str() {
-       "trace" => Ok(Level::Trace),
-       "debug" => Ok(Level::Debug),
-       "info" => Ok(Level::Info),
-       "warning" => Ok(Level::Warning),
-       "error" => Ok(Level::Error),
-       "critical" => Ok(Level::Critical),
-       _ => Err(TestError::InvalidLogLevel)
+        "trace" => Ok(Level::Trace),
+        "debug" => Ok(Level::Debug),
+        "info" => Ok(Level::Info),
+        "warning" => Ok(Level::Warning),
+        "error" => Ok(Level::Error),
+        "critical" => Ok(Level::Critical),
+        _ => Err(TestError::InvalidLogLevel),
     }
 }
 
 pub fn log_level_from_env() -> Result<Option<Level>, TestError> {
     let level_env = env::var_os(LOG_LEVEL_ENV_VAR);
     let level = match level_env {
-        Some(level_str) => {
-            Some(parse_log_level(level_str.into_string()
-                .expect("Log level string has invalid Unicode data"))?)
-        },
-        None => None
+        Some(level_str) => Some(parse_log_level(
+            level_str
+                .into_string()
+                .expect("Log level string has invalid Unicode data"),
+        )?),
+        None => None,
     };
     Ok(level)
 }
@@ -678,10 +684,12 @@ pub fn log_level_from_env() -> Result<Option<Level>, TestError> {
 pub fn standard_log(l: Level) -> Logger {
     Logger::root(
         Mutex::new(LevelFilter::new(
-            slog_bunyan::with_name(crate_name!(),
-                std::io::stdout()).build(),
-            l)).fuse(),
-            o!("build-id" => crate_version!()))
+            slog_bunyan::with_name(crate_name!(), std::io::stdout()).build(),
+            l,
+        ))
+        .fuse(),
+        o!("build-id" => crate_version!()),
+    )
 }
 
 pub fn log_from_env(default_level: Level) -> Result<Logger, TestError> {

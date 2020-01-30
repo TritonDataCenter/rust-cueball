@@ -4,16 +4,8 @@
 
 use std::str::FromStr;
 
-use cueball::backend::{
-    self,
-    Backend,
-    BackendAddress,
-    BackendKey
-};
-use cueball::resolver::{
-    BackendAddedMsg,
-    BackendRemovedMsg,
-};
+use cueball::backend::{self, Backend, BackendAddress, BackendKey};
+use cueball::resolver::{BackendAddedMsg, BackendRemovedMsg};
 
 //
 // Return a vector of some mock manatee ZooKeeper data, given the passed-in ip
@@ -24,7 +16,8 @@ pub fn json_vec(ip: &str, port: u16) -> Vec<u8> {
     // Most of the data here isn't relevant, but real json from zookeeper
     // will include it, so we include it here.
     //
-    format!(r#" {{
+    format!(
+        r#" {{
         "generation": 1,
         "primary": {{
             "id": "{ip}:{port}:12345",
@@ -51,7 +44,12 @@ pub fn json_vec(ip: &str, port: u16) -> Vec<u8> {
             }}
         ],
         "initWal": "0/16522D8"
-    }}"#, ip = ip, port = port).as_bytes().to_vec()
+    }}"#,
+        ip = ip,
+        port = port
+    )
+    .as_bytes()
+    .to_vec()
 }
 
 ///
@@ -60,15 +58,17 @@ pub fn json_vec(ip: &str, port: u16) -> Vec<u8> {
 #[derive(Clone)]
 pub struct BackendData {
     vec: Vec<u8>,
-    object: Backend
+    object: Backend,
 }
 
 impl BackendData {
     pub fn new(ip: &str, port: u16) -> Self {
         BackendData {
             vec: json_vec(ip, port),
-            object: Backend::new(&BackendAddress::from_str(ip)
-                .expect("Invalid IP address"), port)
+            object: Backend::new(
+                &BackendAddress::from_str(ip).expect("Invalid IP address"),
+                port,
+            ),
         }
     }
 
@@ -88,7 +88,7 @@ impl BackendData {
     pub fn added_msg(&self) -> BackendAddedMsg {
         BackendAddedMsg {
             key: self.key(),
-            backend: self.object.clone()
+            backend: self.object.clone(),
         }
     }
 
@@ -149,7 +149,8 @@ pub fn no_ip_vec() -> Vec<u8> {
             ],
             "initWal": "0/16522D8"
         }
-    "#.to_vec()
+    "#
+    .to_vec()
 }
 
 pub fn invalid_ip_vec() -> Vec<u8> {
@@ -181,7 +182,8 @@ pub fn invalid_ip_vec() -> Vec<u8> {
             ],
             "initWal": "0/16522D8"
         }
-    "#.to_vec()
+    "#
+    .to_vec()
 }
 
 pub fn wrong_type_ip_vec() -> Vec<u8> {
@@ -213,7 +215,8 @@ pub fn wrong_type_ip_vec() -> Vec<u8> {
             ],
             "initWal": "0/16522D8"
         }
-    "#.to_vec()
+    "#
+    .to_vec()
 }
 
 pub fn no_pg_url_vec() -> Vec<u8> {
@@ -244,7 +247,8 @@ pub fn no_pg_url_vec() -> Vec<u8> {
             ],
             "initWal": "0/16522D8"
         }
-    "#.to_vec()
+    "#
+    .to_vec()
 }
 
 pub fn invalid_pg_url_vec() -> Vec<u8> {
@@ -276,7 +280,8 @@ pub fn invalid_pg_url_vec() -> Vec<u8> {
             ],
             "initWal": "0/16522D8"
         }
-    "#.to_vec()
+    "#
+    .to_vec()
 }
 
 pub fn wrong_type_pg_url_vec() -> Vec<u8> {
@@ -308,7 +313,8 @@ pub fn wrong_type_pg_url_vec() -> Vec<u8> {
             ],
             "initWal": "0/16522D8"
         }
-    "#.to_vec()
+    "#
+    .to_vec()
 }
 
 pub fn no_port_pg_url_vec() -> Vec<u8> {
@@ -340,5 +346,6 @@ pub fn no_port_pg_url_vec() -> Vec<u8> {
             ],
             "initWal": "0/16522D8"
         }
-    "#.to_vec()
+    "#
+    .to_vec()
 }

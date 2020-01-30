@@ -486,14 +486,12 @@ impl PollResolverFSM for ResolverFSM {
 
 fn init_dns_client(resolver: &str) -> Option<SyncClient<UdpClientConnection>> {
     match resolver.to_string().parse() {
-        Ok(server) => {
-            match UdpClientConnection::new(server) {
-                Ok(conn) => Some(SyncClient::new(conn)),
-                Err(e) => {
-                    panic!("couldn't start a new DNS client connection: {}", e)
-                }
+        Ok(server) => match UdpClientConnection::new(server) {
+            Ok(conn) => Some(SyncClient::new(conn)),
+            Err(e) => {
+                panic!("couldn't start a new DNS client connection: {}", e)
             }
-        }
+        },
         Err(e) => panic!("could not parse resolver ip: {}", e),
     }
 }
@@ -506,22 +504,20 @@ fn configure_default_resolvers(context: &mut ResolverContext) {
 fn configure_from_resolv_conf(context: &mut ResolverContext) -> bool {
     let mut buf = Vec::with_capacity(4096);
     match File::open("/etc/resolv.conf") {
-        Ok(mut f) => {
-            match f.read_to_end(&mut buf) {
-                Ok(_) => {
-                    let cfg = resolv_conf::Config::parse(&buf).unwrap();
-                    for ns in cfg.nameservers.iter() {
-                        let res = format!("{}:{}", ns.to_string(), 53);
-                        context.resolvers.push(res);
-                    }
-                    true
+        Ok(mut f) => match f.read_to_end(&mut buf) {
+            Ok(_) => {
+                let cfg = resolv_conf::Config::parse(&buf).unwrap();
+                for ns in cfg.nameservers.iter() {
+                    let res = format!("{}:{}", ns.to_string(), 53);
+                    context.resolvers.push(res);
                 }
-                Err(e) => {
-                    println!("Parse /etc/resolv.conf: {}", e);
-                    false
-                }
+                true
             }
-        }
+            Err(e) => {
+                println!("Parse /etc/resolv.conf: {}", e);
+                false
+            }
+        },
         Err(e) => {
             println!("Could not open resolve.conf: {}", e);
             false

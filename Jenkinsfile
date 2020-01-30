@@ -17,6 +17,11 @@ pipeline {
                 sh('make check')
             }
         }
+        stage('format-check') {
+            steps{
+                sh('make fmtcheck')
+            }
+        }
         stage('test') {
             steps{
                 sh('make test-unit')

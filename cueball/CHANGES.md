@@ -4,6 +4,11 @@ Known issues:
 
 - [joyent/rust-cueball#24] Rebalance with no backends can cause a crash
 
+## 0.3.2
+
+- [joyent/rust-cueball#25] Add CI check for correct formatting
+- [joyent/rust-cueball#36] Fix connection account bug and remove possible infinite block on pool stop
+
 ## 0.3.1
 
 - [joyent/rust-cueball#33] connection_pool lacks a Drop instance

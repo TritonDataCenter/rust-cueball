@@ -1,6 +1,6 @@
 [package]
 name = "cueball"
-version = "0.3.1"
+version = "0.3.2"
 authors = [
         "Kelly McLaughlin <kelly.mclaughlin@joyent.com>",
         "Jon Anderson <jon.anderson@joyent.com>",

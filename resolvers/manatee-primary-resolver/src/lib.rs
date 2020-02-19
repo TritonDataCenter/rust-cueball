@@ -21,20 +21,25 @@
 //
 
 use std::convert::From;
+use std::default::Default;
 use std::fmt::Debug;
 use std::net::{AddrParseError, SocketAddr};
 use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::Sender;
+use std::sync::mpsc::{channel, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use backoff::backoff::Backoff;
+use backoff::default::{MAX_INTERVAL_MILLIS, MULTIPLIER};
+use backoff::ExponentialBackoff;
 use clap::{crate_name, crate_version};
 use failure::Error as FailureError;
 use futures::future::{loop_fn, ok, Either, Future, Loop};
 use futures::stream::Stream;
 use itertools::Itertools;
+use lazy_static::lazy_static;
 use serde::Deserialize;
 use serde_json;
 use serde_json::Value as SerdeJsonValue;
@@ -66,29 +71,46 @@ pub mod common;
 pub const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
 
 //
-// Timeout for zookeeper sessions. Public for use in tests.
+// Timeout for zookeeper sessions.
 //
-pub const SESSION_TIMEOUT: Duration = Duration::from_secs(5);
+const SESSION_TIMEOUT: Duration = Duration::from_secs(5);
 
 //
-// Timeout for the initial tcp connect operation to zookeeper. Public for use in
-// tests.
+// Timeout for the initial tcp connect operation to zookeeper.
 //
-pub const TCP_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+const TCP_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 
 //
-// Delays to be used when reconnecting to the zookeeper client. Public for use
-// in tests.
+// To be used when we don't want to wait between loop iterations.
 //
-pub const RECONNECT_DELAY: Duration = Duration::from_secs(10);
-pub const RECONNECT_NODELAY: Duration = Duration::from_secs(0);
+const NO_DELAY: Duration = Duration::from_secs(0);
 
-//
-// Delays to be used when re-setting the watch on the zookeeper node. Public for
-// use in tests.
-//
-pub const WATCH_LOOP_DELAY: Duration = Duration::from_secs(10);
-pub const WATCH_LOOP_NODELAY: Duration = Duration::from_secs(0);
+lazy_static! {
+    //
+    // The maximum Duration that next_backoff() can return (when using the
+    // default backoff parameters). Public for use in tests.
+    //
+    pub static ref MAX_BACKOFF_INTERVAL: Duration = Duration::from_millis(
+        (MAX_INTERVAL_MILLIS as f64 * MULTIPLIER).ceil() as u64,
+    );
+
+    //
+    // The amount of time that must elapse after successful connection without
+    // an error occurring in order for the resolver state to be considered
+    // stable, at which point the backoff state is reset.
+    //
+    // We choose the threshold based on MAX_BACKOFF_INTERVAL because if the
+    // threshold were smaller, a given backoff interval could be bigger than the
+    // threshold, so we would prematurely reset the backoff before the operation
+    // even got a chance to try again. The threshold could be bigger, but what's
+    // the point in that?
+    //
+    // We add a little slack so the backoff doesn't get
+    // reset just before a (possibly failing) reconnect attempt is made.
+    //
+    static ref BACKOFF_RESET_THRESHOLD: Duration =
+        *MAX_BACKOFF_INTERVAL + Duration::from_secs(1);
+}
 
 //
 // An error type to be used internally.
@@ -221,6 +243,195 @@ struct WatchLoopState {
     delay: Duration,
 }
 
+//
+// Encapsulates a backoff object and adds the notion of a time threshold that
+// must be reached before the connection is considered stable and the backoff
+// state is reset. This threshold is managed automatically using a background
+// thread -- users can just call ResolverBackoff::next_backoff() normally.
+//
+struct ResolverBackoff {
+    backoff: Arc<Mutex<ExponentialBackoff>>,
+    //
+    // Internal channel used for indicating that an error has occurred to the
+    // stability-tracking thread
+    //
+    error_tx: Sender<ResolverBackoffMsg>,
+    log: Logger,
+}
+
+//
+// For use by ResolverBackoff object
+//
+enum ResolverBackoffMsg {
+    //
+    // The Duration is the duration of the backoff in response to the error
+    //
+    ErrorOccurred(Duration),
+}
+
+//
+// For use by ResolverBackoff object
+//
+enum ResolverBackoffState {
+    Stable,
+    //
+    // The Duration is the duration of the backoff in response to the error
+    //
+    Unstable(Duration),
+}
+
+impl ResolverBackoff {
+    fn new(log: Logger) -> Self {
+        let mut backoff = ExponentialBackoff::default();
+        //
+        // We'd rather the resolver not give up trying to reconnect, so we
+        // set the max_elapsed_time to `None` so next_backoff() always returns
+        // a valid interval.
+        //
+        backoff.max_elapsed_time = None;
+
+        let (error_tx, error_rx) = channel();
+        let backoff = Arc::new(Mutex::new(backoff));
+
+        //
+        // Start the stability-tracking thread.
+        //
+        //
+        // The waiting period for stability starts from the _time of successful
+        // connection_. The time of successful connection, if it occurs at all,
+        // will always be equal to (time of last error + duration of resulting
+        // backoff). Thus, from time of last error, we must wait (duration of
+        // resulting backoff + stability threshold) in order for the connection
+        // to be considered stable. Thus, we pass the backoff duration from
+        // next_backoff to this thread so the thread can figure out how long to
+        // wait for stability.
+        //
+        // Note that this thread doesn't actually _know_ if the connect
+        // operation succeeds, because we only touch the ResolverBackoff
+        // object when an error occurs. However, we can assume that it succeeds
+        // when waiting for stability, because, if the connect operation fails,
+        // this thread will receive another error and restart the wait period.
+        //
+        // If the connect operation takes longer than BACKOFF_RESET_THRESHOLD to
+        // complete and then fails, we'll reset the backoff erroneously. This
+        // situation is highly unlikely, so we'll cross that bridge when we come
+        // to it.
+        //
+        let backoff_clone = Arc::clone(&backoff);
+        let thread_log = log.clone();
+        debug!(log, "spawning stability-tracking thread");
+        thread::spawn(move || {
+            let mut state = ResolverBackoffState::Stable;
+            loop {
+                match state {
+                    ResolverBackoffState::Stable => {
+                        //
+                        // Wait for an error to happen
+                        //
+                        debug!(thread_log, "backoff stable; waiting for error");
+                        match error_rx.recv() {
+                            //
+                            // * zero days since last accident *
+                            //
+                            Ok(ResolverBackoffMsg::ErrorOccurred(
+                                new_backoff,
+                            )) => {
+                                info!(
+                                    thread_log,
+                                    "error received; backoff transitioning to \
+                                     unstable state"
+                                );
+                                state =
+                                    ResolverBackoffState::Unstable(new_backoff);
+                                continue;
+                            }
+                            //
+                            // ResolverBackoff object was dropped, so we exit
+                            // the thread
+                            //
+                            Err(_) => break,
+                        }
+                    }
+                    ResolverBackoffState::Unstable(current_backoff) => {
+                        debug!(
+                            thread_log,
+                            "backoff unstable; waiting for stability"
+                        );
+                        //
+                        // See large comment above for explanation of why we
+                        // wait this long
+                        //
+                        match error_rx.recv_timeout(
+                            current_backoff + *BACKOFF_RESET_THRESHOLD,
+                        ) {
+                            //
+                            // We got another error, so restart the countdown
+                            //
+                            Ok(ResolverBackoffMsg::ErrorOccurred(
+                                new_backoff,
+                            )) => {
+                                debug!(
+                                    thread_log,
+                                    "error received while waiting for \
+                                     stability; restarting wait period"
+                                );
+                                state =
+                                    ResolverBackoffState::Unstable(new_backoff);
+                                continue;
+                            }
+                            //
+                            // Timeout waiting for an error: the stability
+                            // threshold has been reached, so reset the backoff
+                            //
+                            Err(RecvTimeoutError::Timeout) => {
+                                info!(
+                                    thread_log,
+                                    "stability threshold reached; resetting backoff"
+                                );
+                                let backoff =
+                                    &mut *backoff_clone.lock().unwrap();
+                                backoff.reset();
+                                state = ResolverBackoffState::Stable
+                            }
+                            //
+                            // ResolverBackoff object was dropped, so we exit
+                            // the thread
+                            //
+                            Err(RecvTimeoutError::Disconnected) => break,
+                        }
+                    }
+                }
+            }
+            debug!(thread_log, "stability-tracking thread exiting");
+        });
+
+        ResolverBackoff {
+            backoff,
+            error_tx,
+            log,
+        }
+    }
+
+    fn next_backoff(&mut self) -> Duration {
+        let backoff = &mut *self.backoff.lock().unwrap();
+        //
+        // This should never fail because we set max_elapsed_time to `None`
+        // above.
+        //
+        let next_backoff = backoff.next_backoff().unwrap();
+
+        //
+        // Notify the stability-tracking thread that an error has occurred
+        //
+        self.error_tx
+            .send(ResolverBackoffMsg::ErrorOccurred(next_backoff))
+            .expect("Error sending over error_tx");
+
+        debug!(self.log, "retrying with backoff {:?}", next_backoff);
+        next_backoff
+    }
+}
+
 #[derive(Debug)]
 pub struct ManateePrimaryResolver {
     ///
@@ -318,6 +529,7 @@ fn mock_event() -> WatchedEvent {
         path: "".to_string(),
     }
 }
+
 ///
 /// Parses the given zookeeper node data into a Backend object, compares it to
 /// the last Backend sent to the cueball connection pool, and sends it to the
@@ -388,7 +600,9 @@ fn process_value(
             Ok(url) => match url.port() {
                 Some(port) => port,
                 None => {
-                    return Err(ResolverError::MissingZkData(ZkDataField::Port));
+                    return Err(ResolverError::MissingZkData(
+                        ZkDataField::Port,
+                    ));
                 }
             },
             Err(_) => {
@@ -480,6 +694,8 @@ fn watch_loop(
     cluster_state_path: String,
     zk: ZooKeeper,
     loop_state: WatchLoopState,
+    conn_backoff: Arc<Mutex<ResolverBackoff>>,
+    watch_backoff: Arc<Mutex<ResolverBackoff>>,
     log: Logger,
 ) -> impl Future<Item = Loop<NextAction, WatchLoopState>, Error = FailureError> + Send
 {
@@ -495,8 +711,25 @@ fn watch_loop(
         "last_backend" => LogItem(Arc::clone(&last_backend))
     ));
 
-    info!(log, "Getting data");
     let oe_log = log.clone();
+    let oe_conn_backoff = Arc::clone(&conn_backoff);
+
+    //
+    // Helper function to handle the arcmut
+    //
+    fn next_backoff_arcmut(backoff: &Arc<Mutex<ResolverBackoff>>) -> Duration {
+        let backoff = &mut *backoff.lock().unwrap();
+        backoff.next_backoff()
+    }
+
+    //
+    // Helper function to handle the arcmut and the loop boilerplate
+    //
+    fn next_backoff_action(
+        backoff: &Arc<Mutex<ResolverBackoff>>,
+    ) -> Loop<NextAction, WatchLoopState> {
+        Loop::Break(NextAction::Reconnect(next_backoff_arcmut(backoff)))
+    }
 
     //
     // We set the watch here. If the previous iteration of the loop ended
@@ -507,6 +740,7 @@ fn watch_loop(
     // since keeper state changes (and, indeed, changes of any sort) should
     // happen infrequently.
     //
+    info!(log, "Getting data");
     Delay::new(Instant::now() + delay)
         .and_then(move |_| {
             zk
@@ -528,8 +762,7 @@ fn watch_loop(
                             error!(log, "Keeper state changed; reconnecting";
                                 "keeper_state" =>
                                 LogItem(curr_event.keeper_state));
-                            return Either::A(ok(Loop::Break(
-                                NextAction::Reconnect(RECONNECT_NODELAY))));
+                            return Either::A(ok(next_backoff_action(&conn_backoff)));
                         },
                         KeeperState::SyncConnected |
                         KeeperState::ConnectedReadOnly |
@@ -551,7 +784,7 @@ fn watch_loop(
                         return Either::A(ok(Loop::Continue(WatchLoopState {
                             watcher,
                             curr_event,
-                            delay: WATCH_LOOP_DELAY
+                            delay: next_backoff_arcmut(&watch_backoff)
                         })));
                     }
                     //
@@ -592,7 +825,7 @@ fn watch_loop(
                     return Either::A(ok(Loop::Continue(WatchLoopState {
                         watcher,
                         curr_event: mock_event(),
-                        delay: WATCH_LOOP_DELAY
+                        delay: next_backoff_arcmut(&watch_backoff)
                     })));
                 },
                 e => panic!("Unexpected event received: {:?}", e)
@@ -604,8 +837,9 @@ fn watch_loop(
             // we wrap the return value in Either::B. See the comment about
             // "Either" some lines above.
             //
-            info!(log, "Watching for change");
             let oe_log = log.clone();
+            let oe_conn_backoff = Arc::clone(&conn_backoff);
+            info!(log, "Watching for change");
             Either::B(watcher.into_future()
                 .and_then(move |(event, watcher)| {
                     let loop_next = match event {
@@ -616,7 +850,7 @@ fn watch_loop(
                             Loop::Continue(WatchLoopState {
                                 watcher,
                                 curr_event: event,
-                                delay: WATCH_LOOP_NODELAY
+                                delay: NO_DELAY
                             })
                         },
                         //
@@ -626,8 +860,7 @@ fn watch_loop(
                         //
                         None => {
                             error!(log, "Event stream closed; reconnecting");
-                            Loop::Break(NextAction::Reconnect(
-                                RECONNECT_NODELAY))
+                            next_backoff_action(&conn_backoff)
                         }
                     };
                     ok(loop_next)
@@ -642,7 +875,7 @@ fn watch_loop(
                     // to extract from it.
                     //
                     error!(oe_log, "Error received from event stream");
-                    ok(Loop::Break(NextAction::Reconnect(RECONNECT_NODELAY)))
+                    ok(next_backoff_action(&oe_conn_backoff))
                 }))
         })
         //
@@ -651,7 +884,7 @@ fn watch_loop(
         //
         .or_else(move |error| {
             error!(oe_log, "Error getting data"; "error" => LogItem(error));
-            ok(Loop::Break(NextAction::Reconnect(RECONNECT_NODELAY)))
+            ok(next_backoff_action(&oe_conn_backoff))
         })
         })
         .map_err(|e| panic!("delay errored; err: {:?}", e))
@@ -663,9 +896,11 @@ fn connect_loop(
     connect_string: ZkConnectString,
     cluster_state_path: String,
     delay: Duration,
+    conn_backoff: Arc<Mutex<ResolverBackoff>>,
     log: Logger,
 ) -> impl Future<Item = Loop<(), Duration>, Error = ()> + Send {
     let oe_log = log.clone();
+    let oe_conn_backoff = Arc::clone(&conn_backoff);
 
     Delay::new(Instant::now() + delay)
         .and_then(move |_| {
@@ -689,7 +924,10 @@ fn connect_loop(
                 .timeout(TCP_CONNECT_TIMEOUT)
                 .and_then(move |(zk, default_watcher)| {
                     info!(log, "Connected to ZooKeeper cluster");
-
+                    let watch_backoff =
+                        Arc::new(Mutex::new(ResolverBackoff::new(
+                            log.new(o!("component" => "watch_backoff")),
+                        )));
                     //
                     // Main change-watching loop. A new loop iteration means we're
                     // setting a new watch (if necessary) and waiting for a result.
@@ -708,7 +946,7 @@ fn connect_loop(
                         WatchLoopState {
                             watcher: Box::new(default_watcher),
                             curr_event: mock_event(),
-                            delay: WATCH_LOOP_NODELAY,
+                            delay: NO_DELAY,
                         },
                         move |loop_state| {
                             //
@@ -720,6 +958,8 @@ fn connect_loop(
                             let last_backend = Arc::clone(&last_backend);
                             let cluster_state_path = cluster_state_path.clone();
                             let zk = zk.clone();
+                            let conn_backoff = Arc::clone(&conn_backoff);
+                            let watch_backoff = Arc::clone(&watch_backoff);
                             let log = log.clone();
 
                             watch_loop(
@@ -728,12 +968,14 @@ fn connect_loop(
                                 cluster_state_path,
                                 zk,
                                 loop_state,
+                                conn_backoff,
+                                watch_backoff,
                                 log,
                             )
                             .map_err(TimeoutError::inner)
                         },
                     )
-                    .and_then(|next_action| {
+                    .and_then(move |next_action| {
                         ok(match next_action {
                             NextAction::Stop => Loop::Break(()),
                             //
@@ -753,8 +995,8 @@ fn connect_loop(
                 .or_else(move |error| {
                     error!(oe_log, "Error connecting to ZooKeeper cluster";
                 "error" => LogItem(error));
-
-                    ok(Loop::Continue(RECONNECT_DELAY))
+                    let oe_conn_backoff = &mut *oe_conn_backoff.lock().unwrap();
+                    ok(Loop::Continue(oe_conn_backoff.next_backoff()))
                 })
         })
         .map_err(|e| panic!("delay errored; err: {:?}", e))
@@ -814,6 +1056,9 @@ impl Resolver for ManateePrimaryResolver {
         let exited = Arc::new(AtomicBool::new(false));
         let exited_clone = Arc::clone(&exited);
 
+        let conn_backoff = Arc::new(Mutex::new(ResolverBackoff::new(
+            log.new(o!("component" => "conn_backoff")),
+        )));
         //
         // Start the event-processing task. This is structured as two nested
         // loops: one to handle the zookeeper connection and one to handle
@@ -833,11 +1078,12 @@ impl Resolver for ManateePrimaryResolver {
             //     connecting.
             // Loop::Break type: ()
             //
-            loop_fn(RECONNECT_NODELAY, move |delay| {
+            loop_fn(NO_DELAY, move |delay| {
                 let pool_tx = pool_tx.clone();
                 let last_backend = Arc::clone(&last_backend);
                 let connect_string = connect_string.clone();
                 let cluster_state_path = cluster_state_path.clone();
+                let conn_backoff = Arc::clone(&conn_backoff);
                 let log = log.clone();
 
                 connect_loop(
@@ -846,6 +1092,7 @@ impl Resolver for ManateePrimaryResolver {
                     connect_string,
                     cluster_state_path,
                     delay,
+                    conn_backoff,
                     log,
                 )
             })
@@ -906,7 +1153,7 @@ mod test {
     use super::*;
 
     use std::iter;
-    use std::sync::mpsc::{channel, TryRecvError};
+    use std::sync::mpsc::TryRecvError;
     use std::sync::{Arc, Mutex};
     use std::vec::Vec;
 

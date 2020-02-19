@@ -14,7 +14,7 @@ use cueball::resolver::Resolver;
 use cueball_manatee_primary_resolver::common::{test_data, util};
 #[cfg(target_os = "solaris")]
 use cueball_manatee_primary_resolver::{
-    ManateePrimaryResolver, WATCH_LOOP_DELAY,
+    ManateePrimaryResolver, MAX_BACKOFF_INTERVAL,
 };
 #[cfg(target_os = "solaris")]
 use util::{TestAction, TestContext, RESOLVER_STARTUP_DELAY};
@@ -48,7 +48,7 @@ fn watch_test_nonexistent_node() {
         ctx.setup_zk_nodes()?;
 
         // Wait for resolver to notice that the node now exists
-        thread::sleep(WATCH_LOOP_DELAY);
+        thread::sleep(*MAX_BACKOFF_INTERVAL);
 
         // Run a basic test case to make sure all is well
         let data_1 = test_data::backend_ip1_port1();
@@ -108,7 +108,7 @@ fn watch_test_disappearing_node() {
         ctx.setup_zk_nodes()?;
 
         // Wait for resolver to notice that the nodes were recreated
-        thread::sleep(WATCH_LOOP_DELAY);
+        thread::sleep(*MAX_BACKOFF_INTERVAL);
 
         // Run the test case again
         ctx.run_test_case(

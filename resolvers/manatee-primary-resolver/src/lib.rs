@@ -226,16 +226,14 @@ impl<T: Debug> SlogValue for LogItem<T> {
 // Represents an action to be taken in the event of a connection error.
 enum NextAction {
     //
-    // The Duration field is the amount of time to wait before
-    // reconnecting.
+    // The Duration field is the amount of time to wait before reconnecting.
     //
     Reconnect(Duration),
     Stop,
 }
 
 //
-// Encapsulates the state that one iteration of the watch loop passes
-// to the next iteration.
+// Encapsulates the state that changes between iterations of watch_loop().
 //
 struct WatchLoopState {
     watcher: Box<dyn Stream<Item = WatchedEvent, Error = ()> + Send>,
@@ -260,22 +258,22 @@ struct ResolverBackoff {
 }
 
 //
-// For use by ResolverBackoff object
+// For use by ResolverBackoff object.
 //
 enum ResolverBackoffMsg {
     //
-    // The Duration is the duration of the backoff in response to the error
+    // The Duration is the duration of the backoff in response to the error.
     //
     ErrorOccurred(Duration),
 }
 
 //
-// For use by ResolverBackoff object
+// For use by ResolverBackoff object.
 //
 enum ResolverBackoffState {
     Stable,
     //
-    // The Duration is the duration of the backoff in response to the error
+    // The Duration is the duration of the backoff in response to the error.
     //
     Unstable(Duration),
 }
@@ -496,12 +494,127 @@ impl ManateePrimaryResolver {
         });
 
         ManateePrimaryResolver {
-            connect_string: connect_string.clone(),
+            connect_string,
             cluster_state_path,
             last_backend: Arc::new(Mutex::new(None)),
             is_running: false,
             log,
         }
+    }
+}
+
+impl Resolver for ManateePrimaryResolver {
+    //
+    // The resolver object is not Sync, so we can assume that only one instance
+    // of this function is running at once, because callers will have to control
+    // concurrent access.
+    //
+    // If the connection pool closes the receiving end of the channel, this
+    // function may not return right away -- this function will not notice that
+    // the pool has disconnected until this function tries to send another
+    // heartbeat, at which point this function will return. This means that the
+    // time between disconnection and function return is at most the length of
+    // HEARTBEAT_INTERVAL. Any change in the meantime will be picked up by the
+    // next call to run().
+    //
+    // Indeed, the heartbeat messages exist solely as a time-boxed method to
+    // test whether the connection pool has closed the channel, so we don't leak
+    // resolver threads.
+    //
+    fn run(&mut self, s: Sender<BackendMsg>) {
+        debug!(self.log, "run() method entered");
+
+        let mut rt = Runtime::new().unwrap();
+        //
+        // There's no need to check if the pool is already running and return
+        // early, because multiple instances of this function _cannot_ be
+        // running concurrently -- see this function's header comment.
+        //
+        self.is_running = true;
+
+        let conn_backoff = Arc::new(Mutex::new(ResolverBackoff::new(
+            self.log.new(o!("component" => "conn_backoff")),
+        )));
+        let watch_backoff = Arc::new(Mutex::new(ResolverBackoff::new(
+            self.log.new(o!("component" => "watch_backoff")),
+        )));
+        let loop_core = ResolverCore {
+            pool_tx: s.clone(),
+            last_backend: Arc::clone(&self.last_backend),
+            connect_string: self.connect_string.clone(),
+            cluster_state_path: self.cluster_state_path.clone(),
+            conn_backoff,
+            watch_backoff,
+            log: self.log.clone(),
+        };
+        let at_log = self.log.clone();
+
+        let exited = Arc::new(AtomicBool::new(false));
+        let exited_clone = Arc::clone(&exited);
+
+        //
+        // Start the event-processing task. This is structured as two nested
+        // loops: one to handle the zookeeper connection and one to handle
+        // setting the watch. These are handled by the connect_loop() and
+        // watch_loop() functions, respectively.
+        //
+        info!(self.log, "run(): starting runtime");
+        rt.spawn(
+            //
+            // Outer loop. Handles connecting to zookeeper. A new loop iteration
+            // means a new zookeeper connection. We break from the loop if we
+            // discover that the user has closed the receiving channel, which
+            // is their sole means of stopping the client.
+            //
+            // Arg: Time to wait before attempting to connect. Initially 0s.
+            //     Repeated iterations of the loop set a delay before
+            //     connecting.
+            // Loop::Break type: ()
+            //
+            loop_fn(NO_DELAY, move |delay| {
+                loop_core.clone().connect_loop(delay)
+            })
+            .and_then(move |_| {
+                info!(at_log, "Event-processing task stopping");
+                exited_clone.store(true, Ordering::Relaxed);
+                Ok(())
+            })
+            .map(|_| ())
+            .map_err(|_| {
+                unreachable!("connect_loop() should never return an error")
+            }),
+        );
+
+        //
+        // Heartbeat-sending loop. If we break from this loop, the resolver
+        // exits.
+        //
+        loop {
+            if exited.load(Ordering::Relaxed) {
+                info!(
+                    self.log,
+                    "event-processing task exited; stopping heartbeats"
+                );
+                break;
+            }
+            if s.send(BackendMsg::HeartbeatMsg).is_err() {
+                info!(self.log, "Connection pool channel closed");
+                break;
+            }
+            thread::sleep(HEARTBEAT_INTERVAL);
+        }
+
+        //
+        // We shut down the background watch-looping thread. It may have already
+        // exited by itself if it noticed that the connection pool closed its
+        // channel, but there's no harm still calling shutdown_now() in that
+        // case.
+        //
+        info!(self.log, "Stopping runtime");
+        rt.shutdown_now().wait().unwrap();
+        info!(self.log, "Runtime stopped successfully");
+        self.is_running = false;
+        debug!(self.log, "run() returned successfully");
     }
 }
 
@@ -530,32 +643,32 @@ fn mock_event() -> WatchedEvent {
     }
 }
 
-///
-/// Parses the given zookeeper node data into a Backend object, compares it to
-/// the last Backend sent to the cueball connection pool, and sends it to the
-/// connection pool if the values differ.
-///
-/// We need to extract two pieces of data from the "primary" json object in the
-/// json returned by zookeeper:
-/// * The backend's IP address
-/// * The backend's port
-/// The json object has an "ip" field, but not a port field. However, the port
-/// is contained in the "pgUrl" field, so this function extracts it from that.
-/// The port could also be extracted from the "id" field, but the pgUrl field is
-/// a convenient choice as it can be parsed structurally as a url and the port
-/// extracted from there.
-///
-/// What this all means is: the resolver relies on the "primary.ip" and
-/// "primary.pgUrl" fields as an _interface_ to the zookeeper data. This feels a
-/// little ad-hoc and should be formalized and documented.
-///
-/// # Arguments
-///
-/// * `pool_tx` - The Sender upon which to send the update message
-/// * `new_value` - The raw zookeeper data we've newly retrieved
-/// * `last_backend` - The last Backend we sent to the connection pool
-/// * `log` - The Logger to be used for logging
-///
+//
+// Parses the given zookeeper node data into a Backend object, compares it to
+// the last Backend sent to the cueball connection pool, and sends it to the
+// connection pool if the values differ.
+//
+// We need to extract two pieces of data from the "primary" json object in the
+// json returned by zookeeper:
+// * The backend's IP address
+// * The backend's port
+// The json object has an "ip" field, but not a port field. However, the port
+// is contained in the "pgUrl" field, so this function extracts it from that.
+// The port could also be extracted from the "id" field, but the pgUrl field is
+// a convenient choice as it can be parsed structurally as a url and the port
+// extracted from there.
+//
+// What this all means is: the resolver relies on the "primary.ip" and
+// "primary.pgUrl" fields as an _interface_ to the zookeeper data. This feels a
+// little ad-hoc and should be formalized and documented.
+//
+// # Arguments
+//
+// * `pool_tx` - The Sender upon which to send the update message
+// * `new_value` - The raw zookeeper data we've newly retrieved
+// * `last_backend` - The last Backend we sent to the connection pool
+// * `log` - The Logger to be used for logging
+//
 fn process_value(
     pool_tx: &Sender<BackendMsg>,
     new_value: &[u8],
@@ -667,476 +780,356 @@ fn process_value(
     Ok(())
 }
 
-///
-/// This function represents the body of the watch loop. It both sets and
-/// handles the watch, and calls process_value() to send new data to the
-/// connection pool as the data arrives.
-///
-/// This function can return from two states: before we've waited for the
-///  watch to fire (if we hit an error before waiting), or after we've waited
-/// for the watch to fire (this could be a success or an error). These two
-/// states require returning different Future types, so we wrap the returned
-/// values in a future::Either to satisfy the type checker.
-///
-/// # Arguments
-///
-/// * `pool_tx` - The Sender upon which to send the update message
-/// * `last_backend` - The last Backend we sent to the connection pool
-/// * `cluster_state_path` - The path to the cluster state node in zookeeper for
-///   the shard we're watching
-/// * `zk` - The ZooKeeper client object
-/// * `loop_state`: The state to be passed to the next iteration of loop_fn()
-/// * `log` - The Logger to be used for logging
-///
-fn watch_loop(
+//
+// Encapsulates all of the resolver state used in the futures context.
+//
+// Note that this struct's methods consume the instance of the struct they are
+// called upon. The struct should be freely cloned to accommodate this.
+//
+#[derive(Clone)]
+struct ResolverCore {
+    // The Sender that this function should use to communicate with the cueball
+    // connection pool
     pool_tx: Sender<BackendMsg>,
+    // The key representation of the last backend sent to the cueball connection
+    // pool. It will be updated by process_value() if we send a new backend over
     last_backend: Arc<Mutex<Option<BackendKey>>>,
+    // A comma-separated list of the zookeeper instances in the cluster
+    connect_string: ZkConnectString,
+    // The path to the cluster state node in zookeeper for the shard we're
+    // watching
     cluster_state_path: String,
-    zk: ZooKeeper,
-    loop_state: WatchLoopState,
+    // The exponential backoff state for the ZooKeeper connection
     conn_backoff: Arc<Mutex<ResolverBackoff>>,
+    // The exponential backoff state for watching the ZooKeeper node
     watch_backoff: Arc<Mutex<ResolverBackoff>>,
     log: Logger,
-) -> impl Future<Item = Loop<NextAction, WatchLoopState>, Error = FailureError> + Send
-{
-    let watcher = loop_state.watcher;
-    let curr_event = loop_state.curr_event;
-    let delay = loop_state.delay;
-    //
-    // TODO avoid mutex boilerplate from showing up in the log
-    //
-    let log = log.new(o!(
-        "curr_event" => LogItem(curr_event.clone()),
-        "delay" => LogItem(delay),
-        "last_backend" => LogItem(Arc::clone(&last_backend))
-    ));
-
-    let oe_log = log.clone();
-    let oe_conn_backoff = Arc::clone(&conn_backoff);
-
-    //
-    // Helper function to handle the arcmut
-    //
-    fn next_backoff_arcmut(backoff: &Arc<Mutex<ResolverBackoff>>) -> Duration {
-        let backoff = &mut *backoff.lock().unwrap();
-        backoff.next_backoff()
-    }
-
-    //
-    // Helper function to handle the arcmut and the loop boilerplate
-    //
-    fn next_backoff_action(
-        backoff: &Arc<Mutex<ResolverBackoff>>,
-    ) -> Loop<NextAction, WatchLoopState> {
-        Loop::Break(NextAction::Reconnect(next_backoff_arcmut(backoff)))
-    }
-
-    //
-    // We set the watch here. If the previous iteration of the loop ended
-    // because the keeper state changed rather than because the watch fired, the
-    // watch will already have been set, so we don't _need_ to set it here. With
-    // that said, it does no harm (zookeeper deduplicates watches on the server
-    // side), and it may not be worth the effort to optimize for this case,
-    // since keeper state changes (and, indeed, changes of any sort) should
-    // happen infrequently.
-    //
-    info!(log, "Getting data");
-    Delay::new(Instant::now() + delay)
-        .and_then(move |_| {
-            zk
-        .watch()
-        .get_data(&cluster_state_path)
-        .and_then(move |(_, data)| {
-            match curr_event.event_type {
-                // Keeper state has changed
-                WatchedEventType::None => {
-                    match curr_event.keeper_state {
-                        //
-                        // TODO will these cases ever happen? Because if the
-                        // keeper state is "bad", then get_data() will have
-                        // failed and we won't be here.
-                        //
-                        KeeperState::Disconnected |
-                        KeeperState::AuthFailed |
-                        KeeperState::Expired => {
-                            error!(log, "Keeper state changed; reconnecting";
-                                "keeper_state" =>
-                                LogItem(curr_event.keeper_state));
-                            return Either::A(ok(next_backoff_action(&conn_backoff)));
-                        },
-                        KeeperState::SyncConnected |
-                        KeeperState::ConnectedReadOnly |
-                        KeeperState::SaslAuthenticated => {
-                            info!(log, "Keeper state changed"; "keeper_state" =>
-                                LogItem(curr_event.keeper_state));
-                        }
-                    }
-                },
-                // The data watch fired
-                WatchedEventType::NodeDataChanged => {
-                    //
-                    // We didn't get the data, which means the node doesn't
-                    // exist yet. We should wait a bit and try again. We'll just
-                    // use the same event as before.
-                    //
-                    if data.is_none() {
-                        info!(log, "ZK data does not exist yet");
-                        return Either::A(ok(Loop::Continue(WatchLoopState {
-                            watcher,
-                            curr_event,
-                            delay: next_backoff_arcmut(&watch_backoff)
-                        })));
-                    }
-                    //
-                    // Discard the Stat from the data, as we don't use it.
-                    //
-                    let data = data.unwrap().0;
-                    info!(log, "got data"; "data" => LogItem(data.clone()));
-                    match process_value(
-                        &pool_tx.clone(),
-                        &data,
-                        Arc::clone(&last_backend),
-                        log.clone()
-                    ) {
-                        Ok(_) => {},
-                        Err(e) => {
-                            error!(log, ""; "error" => LogItem(e.clone()));
-                            //
-                            // The error is between the client and the
-                            // outward-facing channel, not between the client
-                            // and the zookeeper connection, so we don't have to
-                            // attempt to reconnect here and can continue,
-                            // unless the error tells us to stop.
-                            //
-                            if e.should_stop() {
-                                return Either::A(ok(Loop::Break(
-                                    NextAction::Stop)));
-                            }
-                        }
-                    }
-                },
-                WatchedEventType::NodeDeleted => {
-                    //
-                    // The node doesn't exist, but we can't use the existing
-                    // event, or we'll just loop on this case forever. We use
-                    // the mock event instead.
-                    //
-                    info!(log, "ZK node deleted");
-                    return Either::A(ok(Loop::Continue(WatchLoopState {
-                        watcher,
-                        curr_event: mock_event(),
-                        delay: next_backoff_arcmut(&watch_backoff)
-                    })));
-                },
-                e => panic!("Unexpected event received: {:?}", e)
-            };
-
-            //
-            // If we got here, we're waiting for the watch to fire. Before this
-            // point, we wrap the return value in Either::A. After this point,
-            // we wrap the return value in Either::B. See the comment about
-            // "Either" some lines above.
-            //
-            let oe_log = log.clone();
-            let oe_conn_backoff = Arc::clone(&conn_backoff);
-            info!(log, "Watching for change");
-            Either::B(watcher.into_future()
-                .and_then(move |(event, watcher)| {
-                    let loop_next = match event {
-                        Some(event) => {
-                            info!(log, "change event received; looping to \
-                                process event"; "event" =>
-                                LogItem(event.clone()));
-                            Loop::Continue(WatchLoopState {
-                                watcher,
-                                curr_event: event,
-                                delay: NO_DELAY
-                            })
-                        },
-                        //
-                        // If we didn't get a valid event, this means the Stream
-                        // got closed, which indicates a connection issue, so we
-                        // reconnect.
-                        //
-                        None => {
-                            error!(log, "Event stream closed; reconnecting");
-                            next_backoff_action(&conn_backoff)
-                        }
-                    };
-                    ok(loop_next)
-                })
-                .or_else(move |_| {
-                    //
-                    // If we get an error from the event Stream, we assume that
-                    // something went wrong with the zookeeper connection and
-                    // attempt to reconnect.
-                    //
-                    // The stream's error type is (), so there's no information
-                    // to extract from it.
-                    //
-                    error!(oe_log, "Error received from event stream");
-                    ok(next_backoff_action(&oe_conn_backoff))
-                }))
-        })
-        //
-        // If some error occurred getting the data, we assume we should
-        // reconnect to the zookeeper server.
-        //
-        .or_else(move |error| {
-            error!(oe_log, "Error getting data"; "error" => LogItem(error));
-            ok(next_backoff_action(&oe_conn_backoff))
-        })
-        })
-        .map_err(|e| panic!("delay errored; err: {:?}", e))
 }
 
-fn connect_loop(
-    pool_tx: Sender<BackendMsg>,
-    last_backend: Arc<Mutex<Option<BackendKey>>>,
-    connect_string: ZkConnectString,
-    cluster_state_path: String,
-    delay: Duration,
-    conn_backoff: Arc<Mutex<ResolverBackoff>>,
-    log: Logger,
-) -> impl Future<Item = Loop<(), Duration>, Error = ()> + Send {
-    let oe_log = log.clone();
-    let oe_conn_backoff = Arc::clone(&conn_backoff);
+impl ResolverCore {
+    //
+    // This function represents the body of the connect loop. It handles the
+    // ZooKeeper connection, and calls watch_loop() to watch the ZooKeeper node.
+    //
+    // # Arguments
+    //
+    // * `delay` - The length of time to wait before attempting to connect
+    //
+    fn connect_loop(
+        self,
+        delay: Duration,
+    ) -> impl Future<Item = Loop<(), Duration>, Error = ()> + Send {
+        let log = self.log.clone();
+        let oe_log = log.clone();
+        let oe_conn_backoff = Arc::clone(&self.conn_backoff);
 
-    Delay::new(Instant::now() + delay)
-        .and_then(move |_| {
-            info!(log, "Connecting to ZooKeeper cluster");
+        Delay::new(Instant::now() + delay)
+            .and_then(move |_| {
+                info!(log, "Connecting to ZooKeeper cluster");
 
-            let mut builder = ZooKeeperBuilder::default();
-            builder.set_timeout(SESSION_TIMEOUT);
-            builder.set_logger(log.new(o!(
-                "component" => "zookeeper"
-            )));
+                let mut builder = ZooKeeperBuilder::default();
+                builder.set_timeout(SESSION_TIMEOUT);
+                builder.set_logger(log.new(o!(
+                    "component" => "zookeeper"
+                )));
 
-            //
-            // We expect() the result of get_addr_at() because we anticipate the
-            // connect string having at least one element, and we can't do anything
-            // useful if it doesn't.
-            //
-            builder
-                .connect(connect_string.get_addr_at(0).expect(
-                    "connect_string should have at least one IP address",
-                ))
-                .timeout(TCP_CONNECT_TIMEOUT)
-                .and_then(move |(zk, default_watcher)| {
-                    info!(log, "Connected to ZooKeeper cluster");
-                    let watch_backoff =
-                        Arc::new(Mutex::new(ResolverBackoff::new(
-                            log.new(o!("component" => "watch_backoff")),
-                        )));
-                    //
-                    // Main change-watching loop. A new loop iteration means we're
-                    // setting a new watch (if necessary) and waiting for a result.
-                    // Breaking from the loop means that we've hit some error and are
-                    // returning control to the outer loop.
-                    //
-                    // Arg: WatchLoopState -- we set curr_event to an artificially
-                    //     constructed WatchedEvent for the first loop iteration, so the
-                    //     connection pool will be initialized with the initial primary
-                    //     as its backend.
-                    // Loop::Break type: NextAction -- this value is used to instruct
-                    //     the outer loop (this function) whether to try to reconnect or
-                    //     terminate.
-                    //
-                    loop_fn(
-                        WatchLoopState {
-                            watcher: Box::new(default_watcher),
-                            curr_event: mock_event(),
-                            delay: NO_DELAY,
-                        },
-                        move |loop_state| {
-                            //
-                            // These fields require a new clone for every loop iteration,
-                            // but they don't actually change from iteration to iteration,
-                            // so they're not included as part of loop_state.
-                            //
-                            let pool_tx = pool_tx.clone();
-                            let last_backend = Arc::clone(&last_backend);
-                            let cluster_state_path = cluster_state_path.clone();
-                            let zk = zk.clone();
-                            let conn_backoff = Arc::clone(&conn_backoff);
-                            let watch_backoff = Arc::clone(&watch_backoff);
-                            let log = log.clone();
+                //
+                // We expect() the result of get_addr_at() because we anticipate
+                // the connect string having at least one element, and we can't
+                // do anything useful if it doesn't.
+                //
+                builder
+                    .connect(self.connect_string.get_addr_at(0).expect(
+                        "connect_string should have at least one IP address",
+                    ))
+                    .timeout(TCP_CONNECT_TIMEOUT)
+                    .and_then(move |(zk, default_watcher)| {
+                        info!(log, "Connected to ZooKeeper cluster");
 
-                            watch_loop(
-                                pool_tx,
-                                last_backend,
-                                cluster_state_path,
-                                zk,
-                                loop_state,
-                                conn_backoff,
-                                watch_backoff,
-                                log,
-                            )
-                            .map_err(TimeoutError::inner)
-                        },
-                    )
-                    .and_then(move |next_action| {
-                        ok(match next_action {
-                            NextAction::Stop => Loop::Break(()),
-                            //
-                            // We reconnect immediately here instead of waiting, because
-                            // if we're here it means that we came from the inner loop
-                            // and thus we just had a valid connection terminate (as
-                            // opposed to the `or_else` block below, were we've just
-                            // tried to connect and failed), and thus there's no reason
-                            // for us to delay trying to connect again.
-                            //
-                            NextAction::Reconnect(delay) => {
-                                Loop::Continue(delay)
-                            }
+                        //
+                        // Main change-watching loop. A new loop iteration means
+                        // we're setting a new watch (if necessary) and waiting
+                        // for a result. Breaking from the loop means that we've
+                        // hit some error and are returning control to the outer
+                        // loop.
+                        //
+                        // Arg: WatchLoopState -- we set curr_event to an
+                        //     artificially constructed WatchedEvent for the
+                        //     first loop iteration, so the connection pool will
+                        //     be initialized with the initial primary as its
+                        //     backend.
+                        // Loop::Break type: NextAction -- this value is used to
+                        //     instruct the outer loop (this function) whether
+                        //     to try to reconnect or terminate.
+                        //
+                        loop_fn(
+                            WatchLoopState {
+                                watcher: Box::new(default_watcher),
+                                curr_event: mock_event(),
+                                delay: NO_DELAY,
+                            },
+                            move |loop_state| {
+                                //
+                                // These fields require a new clone for every
+                                // loop iteration, but they don't actually
+                                // change from iteration to iteration, so
+                                // they're not included as part of loop_state.
+                                //
+                                let loop_core = self.clone();
+                                let zk = zk.clone();
+                                loop_core
+                                    .watch_loop(zk, loop_state)
+                                    .map_err(TimeoutError::inner)
+                            },
+                        )
+                        .and_then(move |next_action| {
+                            ok(match next_action {
+                                NextAction::Stop => Loop::Break(()),
+                                //
+                                // We reconnect immediately here instead of
+                                // waiting, because if we're here it means that
+                                // we came from the inner loop and thus we just
+                                // had a valid connection terminate (as opposed
+                                // to the `or_else` block below, were we've just
+                                // tried to connect and failed), and thus
+                                // there's no reason for us to delay trying to
+                                // connect again.
+                                //
+                                NextAction::Reconnect(delay) => {
+                                    Loop::Continue(delay)
+                                }
+                            })
                         })
                     })
-                })
-                .or_else(move |error| {
-                    error!(oe_log, "Error connecting to ZooKeeper cluster";
-                "error" => LogItem(error));
-                    let oe_conn_backoff = &mut *oe_conn_backoff.lock().unwrap();
-                    ok(Loop::Continue(oe_conn_backoff.next_backoff()))
-                })
-        })
-        .map_err(|e| panic!("delay errored; err: {:?}", e))
-}
-
-impl Resolver for ManateePrimaryResolver {
-    //
-    // The resolver object is not Sync, so we can assume that only one instance
-    // of this function is running at once, because callers will have to control
-    // concurrent access.
-    //
-    // If the connection pool closes the receiving end of the channel, this
-    // function may not return right away -- this function will not notice that
-    // the pool has disconnected until this function tries to send another
-    // heartbeat, at which point this function will return. This means that the
-    // time between disconnection and function return is at most the length of
-    // HEARTBEAT_INTERVAL. Any change in the meantime will be picked up by the
-    // next call to run().
-    //
-    // Indeed, the heartbeat messages exist solely as a time-boxed method to
-    // test whether the connection pool has closed the channel, so we don't leak
-    // resolver threads.
-    //
-    fn run(&mut self, s: Sender<BackendMsg>) {
-        debug!(self.log, "run() method entered");
-
-        let mut rt = Runtime::new().unwrap();
-        //
-        // There's no need to check if the pool is already running and return
-        // early, because multiple instances of this function _cannot_ be
-        // running concurrently -- see this function's header comment.
-        //
-        self.is_running = true;
-
-        //
-        // Variables moved to tokio runtime thread:
-        //
-        // * `connect_string` - A comma-separated list of the zookeeper
-        //   instances in the cluster
-        // * `cluster_state_path` - The path to the cluster state node in
-        //   zookeeper for the shard we're watching
-        // * `pool_tx` - The Sender that this function should use to communicate
-        //   with the cueball connection pool
-        // * `last_backend` - The key representation of the last backend sent to
-        //   the cueball connection pool. It will be updated by process_value()
-        //   if we send a new backend over.
-        // * log - A clone of the resolver's master log
-        // * at_log - Another clone, used in the `and_then` portion of the loop
-        //
-        let connect_string = self.connect_string.clone();
-        let cluster_state_path = self.cluster_state_path.clone();
-        let pool_tx = s.clone();
-        let last_backend = Arc::clone(&self.last_backend);
-        let log = self.log.clone();
-        let at_log = self.log.clone();
-
-        let exited = Arc::new(AtomicBool::new(false));
-        let exited_clone = Arc::clone(&exited);
-
-        let conn_backoff = Arc::new(Mutex::new(ResolverBackoff::new(
-            log.new(o!("component" => "conn_backoff")),
-        )));
-        //
-        // Start the event-processing task. This is structured as two nested
-        // loops: one to handle the zookeeper connection and one to handle
-        // setting the watch. These are handled by the connect_loop() and
-        // watch_loop() functions, respectively
-        //
-        info!(self.log, "run(): starting runtime");
-        rt.spawn(
-            //
-            // Outer loop. Handles connecting to zookeeper. A new loop iteration
-            // means a new zookeeper connection. We break from the loop if we
-            // discover that the user has closed the receiving channel, which
-            // is their sole means of stopping the client.
-            //
-            // Arg: Time to wait before attempting to connect. Initially 0s.
-            //     Repeated iterations of the loop set a delay before
-            //     connecting.
-            // Loop::Break type: ()
-            //
-            loop_fn(NO_DELAY, move |delay| {
-                let pool_tx = pool_tx.clone();
-                let last_backend = Arc::clone(&last_backend);
-                let connect_string = connect_string.clone();
-                let cluster_state_path = cluster_state_path.clone();
-                let conn_backoff = Arc::clone(&conn_backoff);
-                let log = log.clone();
-
-                connect_loop(
-                    pool_tx,
-                    last_backend,
-                    connect_string,
-                    cluster_state_path,
-                    delay,
-                    conn_backoff,
-                    log,
-                )
+                    .or_else(move |error| {
+                        error!(oe_log, "Error connecting to ZooKeeper cluster";
+                    "error" => LogItem(error));
+                        let oe_conn_backoff =
+                            &mut *oe_conn_backoff.lock().unwrap();
+                        ok(Loop::Continue(oe_conn_backoff.next_backoff()))
+                    })
             })
-            .and_then(move |_| {
-                info!(at_log, "Event-processing task stopping");
-                exited_clone.store(true, Ordering::Relaxed);
-                Ok(())
-            })
-            .map(|_| ())
-            .map_err(|_| {
-                unreachable!("connect_loop() should never return an error")
-            }),
-        );
+            .map_err(|e| panic!("delay errored; err: {:?}", e))
+    }
+
+    //
+    // This function represents the body of the watch loop. It both sets and
+    // handles the watch, and calls process_value() to send new data to the
+    // connection pool as the data arrives.
+    //
+    // This function can return from two states: before we've waited for the
+    //  watch to fire (if we hit an error before waiting), or after we've waited
+    // for the watch to fire (this could be a success or an error). These two
+    // states require returning different Future types, so we wrap the returned
+    // values in a future::Either to satisfy the type checker.
+    //
+    // # Arguments
+    //
+    // * `zk` - The ZooKeeper client object
+    // * `loop_state`: The state to be passed to the next iteration of loop_fn()
+    //
+    fn watch_loop(
+        self,
+        zk: ZooKeeper,
+        loop_state: WatchLoopState,
+    ) -> impl Future<
+        Item = Loop<NextAction, WatchLoopState>,
+        Error = FailureError,
+    > + Send {
+        let watcher = loop_state.watcher;
+        let curr_event = loop_state.curr_event;
+        let delay = loop_state.delay;
+        //
+        // TODO avoid mutex boilerplate from showing up in the log
+        //
+        let log = self.log.new(o!(
+            "curr_event" => LogItem(curr_event.clone()),
+            "delay" => LogItem(delay),
+            "last_backend" => LogItem(Arc::clone(&self.last_backend))
+        ));
+
+        let oe_log = log.clone();
+        let oe_conn_backoff = Arc::clone(&self.conn_backoff);
 
         //
-        // Heartbeat-sending loop. If we break from this loop, the resolver
-        // exits.
+        // Helper function to handle the arcmut
         //
-        loop {
-            if exited.load(Ordering::Relaxed) {
-                info!(
-                    self.log,
-                    "event-processing task exited; stopping heartbeats"
-                );
-                break;
-            }
-            if s.send(BackendMsg::HeartbeatMsg).is_err() {
-                info!(self.log, "Connection pool channel closed");
-                break;
-            }
-            thread::sleep(HEARTBEAT_INTERVAL);
+        fn next_backoff_arcmut(
+            backoff: &Arc<Mutex<ResolverBackoff>>,
+        ) -> Duration {
+            let backoff = &mut *backoff.lock().unwrap();
+            backoff.next_backoff()
         }
 
         //
-        // We shut down the background watch-looping thread. It may have already
-        // exited by itself if it noticed that the connection pool closed its
-        // channel, but there's no harm still calling shutdown_now() in that
-        // case.
+        // Helper function to handle the arcmut and the loop boilerplate
         //
-        info!(self.log, "Stopping runtime");
-        rt.shutdown_now().wait().unwrap();
-        info!(self.log, "Runtime stopped successfully");
-        self.is_running = false;
-        debug!(self.log, "run() returned successfully");
+        fn next_backoff_action(
+            backoff: &Arc<Mutex<ResolverBackoff>>,
+        ) -> Loop<NextAction, WatchLoopState> {
+            Loop::Break(NextAction::Reconnect(next_backoff_arcmut(backoff)))
+        }
+
+        //
+        // We set the watch here. If the previous iteration of the loop ended
+        // because the keeper state changed rather than because the watch fired,
+        // the watch will already have been set, so we don't _need_ to set it
+        // here. With that said, it does no harm (zookeeper deduplicates watches
+        // on the server side), and it may not be worth the effort to optimize
+        // for this case, since keeper state changes (and, indeed, changes of
+        // any sort) should happen infrequently.
+        //
+        info!(log, "Getting data");
+        Delay::new(Instant::now() + delay)
+            .and_then(move |_| {
+                zk
+            .watch()
+            .get_data(&self.cluster_state_path)
+            .and_then(move |(_, data)| {
+                match curr_event.event_type {
+                    // Keeper state has changed
+                    WatchedEventType::None => {
+                        match curr_event.keeper_state {
+                            //
+                            // TODO will these cases ever happen? Because if the
+                            // keeper state is "bad", then get_data() will have
+                            // failed and we won't be here.
+                            //
+                            KeeperState::Disconnected |
+                            KeeperState::AuthFailed |
+                            KeeperState::Expired => {
+                                error!(log, "Keeper state changed; reconnecting";
+                                    "keeper_state" =>
+                                    LogItem(curr_event.keeper_state));
+                                return Either::A(ok(next_backoff_action(
+                                    &self.conn_backoff)));
+                            },
+                            KeeperState::SyncConnected |
+                            KeeperState::ConnectedReadOnly |
+                            KeeperState::SaslAuthenticated => {
+                                info!(log, "Keeper state changed";
+                                    "keeper_state" =>
+                                    LogItem(curr_event.keeper_state));
+                            }
+                        }
+                    },
+                    // The data watch fired
+                    WatchedEventType::NodeDataChanged => {
+                        //
+                        // We didn't get the data, which means the node doesn't
+                        // exist yet. We should wait a bit and try again. We'll
+                        // just use the same event as before.
+                        //
+                        if data.is_none() {
+                            info!(log, "ZK data does not exist yet");
+                            return Either::A(ok(Loop::Continue(WatchLoopState {
+                                watcher,
+                                curr_event,
+                                delay: next_backoff_arcmut(&self.watch_backoff)
+                            })));
+                        }
+                        //
+                        // Discard the Stat from the data, as we don't use it.
+                        //
+                        let data = data.unwrap().0;
+                        info!(log, "got data"; "data" => LogItem(data.clone()));
+                        match process_value(
+                            &self.pool_tx.clone(),
+                            &data,
+                            Arc::clone(&self.last_backend),
+                            log.clone()
+                        ) {
+                            Ok(_) => {},
+                            Err(e) => {
+                                error!(log, ""; "error" => LogItem(e.clone()));
+                                //
+                                // The error is between the client and the
+                                // outward-facing channel, not between the
+                                // client and the zookeeper connection, so we
+                                // don't have to attempt to reconnect here and
+                                // can continue, unless the error tells us to
+                                // stop.
+                                //
+                                if e.should_stop() {
+                                    return Either::A(ok(Loop::Break(
+                                        NextAction::Stop)));
+                                }
+                            }
+                        }
+                    },
+                    WatchedEventType::NodeDeleted => {
+                        //
+                        // The node doesn't exist, but we can't use the existing
+                        // event, or we'll just loop on this case forever. We
+                        // use the mock event instead.
+                        //
+                        info!(log, "ZK node deleted");
+                        return Either::A(ok(Loop::Continue(WatchLoopState {
+                            watcher,
+                            curr_event: mock_event(),
+                            delay: next_backoff_arcmut(&self.watch_backoff)
+                        })));
+                    },
+                    e => panic!("Unexpected event received: {:?}", e)
+                };
+
+                //
+                // If we got here, we're waiting for the watch to fire. Before
+                // this point, we wrap the return value in Either::A. After this
+                // point, we wrap the return value in Either::B. See the comment
+                // about "Either" some lines above.
+                //
+                let oe_log = log.clone();
+                let oe_conn_backoff = Arc::clone(&self.conn_backoff);
+                info!(log, "Watching for change");
+                Either::B(watcher.into_future()
+                    .and_then(move |(event, watcher)| {
+                        let loop_next = match event {
+                            Some(event) => {
+                                info!(log, "change event received; looping to \
+                                    process event"; "event" =>
+                                    LogItem(event.clone()));
+                                Loop::Continue(WatchLoopState {
+                                    watcher,
+                                    curr_event: event,
+                                    delay: NO_DELAY
+                                })
+                            },
+                            //
+                            // If we didn't get a valid event, this means the
+                            // Stream got closed, which indicates a connection
+                            // issue, so we reconnect.
+                            //
+                            None => {
+                                error!(log, "Event stream closed; reconnecting");
+                                next_backoff_action(&self.conn_backoff)
+                            }
+                        };
+                        ok(loop_next)
+                    })
+                    .or_else(move |_| {
+                        //
+                        // If we get an error from the event Stream, we assume
+                        // that something went wrong with the zookeeper
+                        // connection and attempt to reconnect.
+                        //
+                        // The stream's error type is (), so there's no
+                        // information to extract from it.
+                        //
+                        error!(oe_log, "Error received from event stream");
+                        ok(next_backoff_action(&oe_conn_backoff))
+                    }))
+            })
+            //
+            // If some error occurred getting the data, we assume we should
+            // reconnect to the zookeeper server.
+            //
+            .or_else(move |error| {
+                error!(oe_log, "Error getting data"; "error" => LogItem(error));
+                ok(next_backoff_action(&oe_conn_backoff))
+            })
+            })
+            .map_err(|e| panic!("delay errored; err: {:?}", e))
     }
 }
 

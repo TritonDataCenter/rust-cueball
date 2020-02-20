@@ -932,10 +932,8 @@ impl ResolverCore {
         self,
         zk: ZooKeeper,
         loop_state: WatchLoopState,
-    ) -> impl Future<
-        Item = Loop<NextAction, WatchLoopState>,
-        Error = FailureError,
-    > + Send {
+    ) -> impl Future<Item = Loop<NextAction, WatchLoopState>, Error = FailureError>
+           + Send {
         let watcher = loop_state.watcher;
         let curr_event = loop_state.curr_event;
         let delay = loop_state.delay;

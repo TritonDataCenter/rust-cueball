@@ -1,6 +1,6 @@
 [package]
 name = "cueball-manatee-primary-resolver"
-version = "0.3.1"
+version = "0.4.0"
 authors = ["Kelly McLaughlin <kelly.mclaughlin@joyent.com>", "Isaac Davis <isaac.davis@joyent.com>"]
 description = """
 An implementation of the cueball Resolver trait that is specific to the Joyent manatee project. It queries a zookeeper
@@ -13,11 +13,13 @@ license = "MPL-2.0"
 edition = "2018"
 
 [dependencies]
+backoff = "0.1.6"
 clap = "2.32"
 cueball = { path = "../../cueball", version = "0.3.0" }
 itertools = "0.8.0"
 failure = "0.1.5"
 futures = "0.1.28"
+lazy_static = "1.4.0"
 serde = { version ="1.0.102", features = ["derive"]}
 serde_json = "1.0.40"
 slog = { version = "2.4.1", features = [ "max_level_trace" ] }

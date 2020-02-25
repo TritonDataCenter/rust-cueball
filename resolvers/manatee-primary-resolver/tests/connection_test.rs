@@ -16,11 +16,10 @@ use cueball::resolver::Resolver;
 #[cfg(target_os = "solaris")]
 use common::util::{
     self, TestContext, TestError, ZkStatus, RESOLVER_STARTUP_DELAY,
-    SLACK_DURATION,
 };
 #[cfg(target_os = "solaris")]
 use cueball_manatee_primary_resolver::{
-    common, ManateePrimaryResolver, RECONNECT_DELAY, TCP_CONNECT_TIMEOUT,
+    common, ManateePrimaryResolver, MAX_BACKOFF_INTERVAL,
 };
 
 #[cfg(target_os = "solaris")]
@@ -64,9 +63,9 @@ fn connection_test_start_with_unreachable_zookeeper() {
 
         //
         // Wait the maximum possible amount of time that could elapse without
-        // the resolver reconnecting, plus a little extra to be safe.
+        // the resolver reconnecting
         //
-        thread::sleep(RECONNECT_DELAY + TCP_CONNECT_TIMEOUT + SLACK_DURATION);
+        thread::sleep(*MAX_BACKOFF_INTERVAL);
 
         // Check that the resolver has reconnected
         let connected = ctx.resolver_connected(&rx)?;
@@ -130,7 +129,7 @@ fn connection_test_reconnect_after_zk_hiccup() {
         // Wait the maximum possible amount of time that could elapse without
         // the resolver reconnecting, plus a little extra to be safe.
         //
-        thread::sleep(RECONNECT_DELAY + TCP_CONNECT_TIMEOUT + SLACK_DURATION);
+        thread::sleep(*MAX_BACKOFF_INTERVAL);
 
         // Check that the resolver has reconnected
         let connected = ctx.resolver_connected(&rx)?;

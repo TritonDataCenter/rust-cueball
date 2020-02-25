@@ -413,10 +413,13 @@ impl ResolverBackoff {
     fn next_backoff(&mut self) -> Duration {
         let backoff = &mut *self.backoff.lock().unwrap();
         //
-        // This should never fail because we set max_elapsed_time to `None`
-        // above.
+        // This should never fail because we set max_elapsed_time to `None` in
+        // ResolverBackoff::new().
         //
-        let next_backoff = backoff.next_backoff().unwrap();
+        let next_backoff = backoff.next_backoff().expect(
+            "next_backoff returned
+            None; max_elapsed_time has been reached erroneously",
+        );
 
         //
         // Notify the stability-tracking thread that an error has occurred
@@ -713,7 +716,9 @@ fn process_value(
             Ok(url) => match url.port() {
                 Some(port) => port,
                 None => {
-                    return Err(ResolverError::MissingZkData(ZkDataField::Port));
+                    return Err(ResolverError::MissingZkData(
+                        ZkDataField::Port,
+                    ));
                 }
             },
             Err(_) => {

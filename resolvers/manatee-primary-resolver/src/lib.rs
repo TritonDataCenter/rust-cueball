@@ -716,9 +716,7 @@ fn process_value(
             Ok(url) => match url.port() {
                 Some(port) => port,
                 None => {
-                    return Err(ResolverError::MissingZkData(
-                        ZkDataField::Port,
-                    ));
+                    return Err(ResolverError::MissingZkData(ZkDataField::Port));
                 }
             },
             Err(_) => {

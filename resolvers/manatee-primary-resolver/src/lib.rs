@@ -166,8 +166,15 @@ impl ZkConnectString {
     /// Gets a reference to the SocketAddr at the provided index. Returns None
     /// if the index is out of bounds.
     ///
-    fn get_addr_at(&self, index: usize) -> Option<&SocketAddr> {
-        self.0.get(index)
+    fn get_addr_at(&self, index: usize) -> Option<SocketAddr> {
+        self.0.get(index).copied()
+    }
+
+    ///
+    /// Returns the number of addresses in the ZkConnectString
+    ///
+    fn len(&self) -> usize {
+        self.0.len()
     }
 }
 
@@ -200,6 +207,42 @@ impl FromStr for ZkConnectString {
                 (_, Err(e)) => Err(ZkConnectStringError::from(e)),
             })
             .and_then(|x| Ok(ZkConnectString(x)))
+    }
+}
+
+#[derive(Debug, Clone)]
+struct ZkConnectStringState {
+    conn_str: ZkConnectString,
+    curr_idx: usize,
+    conn_attempts: usize,
+}
+
+impl ZkConnectStringState {
+    fn new(conn_str: ZkConnectString) -> Self {
+        ZkConnectStringState {
+            conn_str,
+            curr_idx: 0,
+            conn_attempts: 0,
+        }
+    }
+
+    fn next_addr(&mut self) -> SocketAddr {
+        let ret = self
+            .conn_str
+            .get_addr_at(self.curr_idx)
+            .expect("connect string access out of bounds");
+        self.curr_idx += 1;
+        self.curr_idx %= self.conn_str.len();
+        self.conn_attempts += 1;
+        ret
+    }
+
+    fn reset_attempts(&mut self) {
+        self.conn_attempts = 0;
+    }
+
+    fn should_wait(&self) -> bool {
+        self.conn_attempts == self.conn_str.len()
     }
 }
 
@@ -386,8 +429,7 @@ impl ResolverBackoff {
                                     thread_log,
                                     "stability threshold reached; resetting backoff"
                                 );
-                                let backoff =
-                                    &mut *backoff_clone.lock().unwrap();
+                                let mut backoff = backoff_clone.lock().unwrap();
                                 backoff.reset();
                                 state = ResolverBackoffState::Stable
                             }
@@ -411,7 +453,7 @@ impl ResolverBackoff {
     }
 
     fn next_backoff(&mut self) -> Duration {
-        let backoff = &mut *self.backoff.lock().unwrap();
+        let mut backoff = self.backoff.lock().unwrap();
         //
         // This should never fail because we set max_elapsed_time to `None` in
         // ResolverBackoff::new().
@@ -433,12 +475,50 @@ impl ResolverBackoff {
     }
 }
 
+#[derive(Debug, Clone)]
+enum DelayBehavior {
+    AlwaysWait,
+    CheckConnState(Arc<Mutex<ZkConnectStringState>>),
+}
+
+//
+// Helper function: Accepts a ResolverBackoff and a DelayBehavior. Returns a
+// duration to wait accordingly, consulting the provided ZkConnectStringState if
+// applicable.
+//
+// NOTE: also resets the ZkConnectStringState's connection attempts if
+// `behavior` is CheckConnState and it is found that we should wait.
+//
+fn next_delay(
+    backoff: &Arc<Mutex<ResolverBackoff>>,
+    behavior: &DelayBehavior,
+) -> Duration {
+    match behavior {
+        DelayBehavior::AlwaysWait => {
+            let backoff = &mut backoff.lock().unwrap();
+            backoff.next_backoff()
+        }
+        DelayBehavior::CheckConnState(conn_str_state) => {
+            let mut conn_str_state = conn_str_state.lock().unwrap();
+            let should_wait = conn_str_state.should_wait();
+            if should_wait {
+                conn_str_state.reset_attempts();
+                let backoff = &mut backoff.lock().unwrap();
+                backoff.next_backoff()
+            } else {
+                NO_DELAY
+            }
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct ManateePrimaryResolver {
     ///
-    /// The addresses of the Zookeeper cluster the Resolver is connecting to
+    /// The addresses of the Zookeeper cluster the Resolver is connecting to,
+    /// along with associated state
     ///
-    connect_string: ZkConnectString,
+    conn_str_state: Arc<Mutex<ZkConnectStringState>>,
     ///
     /// The Zookeeper path for manatee cluster state for the shard. *e.g.*
     /// "/manatee/1.moray.coal.joyent.us/state"
@@ -468,13 +548,13 @@ impl ManateePrimaryResolver {
     ///
     /// # Arguments
     ///
-    /// * `connect_string` - a comma-separated list of the zookeeper instances
+    /// * `conn_str` - a comma-separated list of the zookeeper instances
     ///   in the cluster
     /// * `path` - The path to the root node in zookeeper for the shard we're
     ///    watching
     ///
     pub fn new(
-        connect_string: ZkConnectString,
+        conn_str: ZkConnectString,
         path: String,
         log: Option<Logger>,
     ) -> Self {
@@ -497,7 +577,9 @@ impl ManateePrimaryResolver {
         });
 
         ManateePrimaryResolver {
-            connect_string,
+            conn_str_state: Arc::new(Mutex::new(ZkConnectStringState::new(
+                conn_str,
+            ))),
             cluster_state_path,
             last_backend: Arc::new(Mutex::new(None)),
             is_running: false,
@@ -544,7 +626,7 @@ impl Resolver for ManateePrimaryResolver {
         let loop_core = ResolverCore {
             pool_tx: s.clone(),
             last_backend: Arc::clone(&self.last_backend),
-            connect_string: self.connect_string.clone(),
+            conn_str_state: Arc::clone(&self.conn_str_state),
             cluster_state_path: self.cluster_state_path.clone(),
             conn_backoff,
             watch_backoff,
@@ -638,11 +720,10 @@ fn mock_event() -> WatchedEvent {
         //
         keeper_state: KeeperState::SyncConnected,
         //
-        // We never use `path`, so we might as well set it to an
-        // empty string in our artificially constructed WatchedEvent
-        // object.
+        // We never use `path`, so we might as well set it to a clarifying
+        // string in our artificially constructed WatchedEvent object.
         //
-        path: "".to_string(),
+        path: "MOCK_EVENT_PATH".to_string(),
     }
 }
 
@@ -795,8 +876,9 @@ struct ResolverCore {
     // The key representation of the last backend sent to the cueball connection
     // pool. It will be updated by process_value() if we send a new backend over
     last_backend: Arc<Mutex<Option<BackendKey>>>,
-    // A comma-separated list of the zookeeper instances in the cluster
-    connect_string: ZkConnectString,
+    // The addresses of the Zookeeper cluster the Resolver is connecting to,
+    // along with associated state
+    conn_str_state: Arc<Mutex<ZkConnectStringState>>,
     // The path to the cluster state node in zookeeper for the shard we're
     // watching
     cluster_state_path: String,
@@ -823,16 +905,22 @@ impl ResolverCore {
         let log = self.log.clone();
         let oe_log = log.clone();
         let oe_conn_backoff = Arc::clone(&self.conn_backoff);
+        let oe_conn_str_state = Arc::clone(&self.conn_str_state);
 
         Delay::new(Instant::now() + delay)
             .and_then(move |_| {
-                info!(log, "Connecting to ZooKeeper cluster");
-
                 let mut builder = ZooKeeperBuilder::default();
                 builder.set_timeout(SESSION_TIMEOUT);
                 builder.set_logger(log.new(o!(
                     "component" => "zookeeper"
                 )));
+
+                // Get the next address to connect to
+                let mut state = self.conn_str_state.lock().unwrap();
+                let addr = state.next_addr();
+                drop(state);
+
+                info!(log, "Connecting to ZooKeeper"; "addr" => LogItem(addr));
 
                 //
                 // We expect() the result of get_addr_at() because we anticipate
@@ -840,12 +928,19 @@ impl ResolverCore {
                 // do anything useful if it doesn't.
                 //
                 builder
-                    .connect(self.connect_string.get_addr_at(0).expect(
-                        "connect_string should have at least one IP address",
-                    ))
+                    .connect(&addr)
                     .timeout(TCP_CONNECT_TIMEOUT)
                     .and_then(move |(zk, default_watcher)| {
-                        info!(log, "Connected to ZooKeeper cluster");
+                        info!(log, "Connected to ZooKeeper";
+                            "addr" => LogItem(addr));
+
+                        //
+                        // We've connected successfully, so reset the
+                        // connection attempts
+                        //
+                        let mut state = self.conn_str_state.lock().unwrap();
+                        state.reset_attempts();
+                        drop(state);
 
                         //
                         // Main change-watching loop. A new loop iteration means
@@ -905,9 +1000,10 @@ impl ResolverCore {
                     .or_else(move |error| {
                         error!(oe_log, "Error connecting to ZooKeeper cluster";
                     "error" => LogItem(error));
-                        let oe_conn_backoff =
-                            &mut *oe_conn_backoff.lock().unwrap();
-                        ok(Loop::Continue(oe_conn_backoff.next_backoff()))
+                        ok(Loop::Continue(next_delay(
+                            &oe_conn_backoff,
+                            &DelayBehavior::CheckConnState(oe_conn_str_state),
+                        )))
                     })
             })
             .map_err(|e| panic!("delay errored; err: {:?}", e))
@@ -940,6 +1036,8 @@ impl ResolverCore {
         let watcher = loop_state.watcher;
         let curr_event = loop_state.curr_event;
         let delay = loop_state.delay;
+        let check_behavior =
+            DelayBehavior::CheckConnState(self.conn_str_state.clone());
         //
         // TODO avoid mutex boilerplate from showing up in the log
         //
@@ -951,24 +1049,16 @@ impl ResolverCore {
 
         let oe_log = log.clone();
         let oe_conn_backoff = Arc::clone(&self.conn_backoff);
-
-        //
-        // Helper function to handle the arcmut
-        //
-        fn next_backoff_arcmut(
-            backoff: &Arc<Mutex<ResolverBackoff>>,
-        ) -> Duration {
-            let backoff = &mut *backoff.lock().unwrap();
-            backoff.next_backoff()
-        }
+        let oe_check_behavior = check_behavior.clone();
 
         //
         // Helper function to handle the arcmut and the loop boilerplate
         //
-        fn next_backoff_action(
+        fn next_delay_action(
             backoff: &Arc<Mutex<ResolverBackoff>>,
+            behavior: &DelayBehavior,
         ) -> Loop<NextAction, WatchLoopState> {
-            Loop::Break(NextAction::Reconnect(next_backoff_arcmut(backoff)))
+            Loop::Break(NextAction::Reconnect(next_delay(backoff, behavior)))
         }
 
         //
@@ -1002,8 +1092,10 @@ impl ResolverCore {
                                 error!(log, "Keeper state changed; reconnecting";
                                     "keeper_state" =>
                                     LogItem(curr_event.keeper_state));
-                                return Either::A(ok(next_backoff_action(
-                                    &self.conn_backoff)));
+                                return Either::A(ok(next_delay_action(
+                                    &self.conn_backoff,
+                                    &check_behavior
+                                )));
                             },
                             KeeperState::SyncConnected |
                             KeeperState::ConnectedReadOnly |
@@ -1023,10 +1115,14 @@ impl ResolverCore {
                         //
                         if data.is_none() {
                             info!(log, "ZK data does not exist yet");
+                            let delay = next_delay(
+                                &self.watch_backoff,
+                                &DelayBehavior::AlwaysWait
+                            );
                             return Either::A(ok(Loop::Continue(WatchLoopState {
                                 watcher,
                                 curr_event,
-                                delay: next_backoff_arcmut(&self.watch_backoff)
+                                delay,
                             })));
                         }
                         //
@@ -1065,10 +1161,14 @@ impl ResolverCore {
                         // use the mock event instead.
                         //
                         info!(log, "ZK node deleted");
+                        let delay = next_delay(
+                            &self.watch_backoff,
+                            &DelayBehavior::AlwaysWait
+                        );
                         return Either::A(ok(Loop::Continue(WatchLoopState {
                             watcher,
                             curr_event: mock_event(),
-                            delay: next_backoff_arcmut(&self.watch_backoff)
+                            delay,
                         })));
                     },
                     e => panic!("Unexpected event received: {:?}", e)
@@ -1082,6 +1182,8 @@ impl ResolverCore {
                 //
                 let oe_log = log.clone();
                 let oe_conn_backoff = Arc::clone(&self.conn_backoff);
+                let oe_check_behavior = check_behavior.clone();
+
                 info!(log, "Watching for change");
                 Either::B(watcher.into_future()
                     .and_then(move |(event, watcher)| {
@@ -1103,7 +1205,10 @@ impl ResolverCore {
                             //
                             None => {
                                 error!(log, "Event stream closed; reconnecting");
-                                next_backoff_action(&self.conn_backoff)
+                                next_delay_action(
+                                    &self.conn_backoff,
+                                    &check_behavior
+                                )
                             }
                         };
                         ok(loop_next)
@@ -1118,7 +1223,10 @@ impl ResolverCore {
                         // information to extract from it.
                         //
                         error!(oe_log, "Error received from event stream");
-                        ok(next_backoff_action(&oe_conn_backoff))
+                        ok(next_delay_action(
+                            &oe_conn_backoff,
+                            &oe_check_behavior
+                        ))
                     }))
             })
             //
@@ -1127,7 +1235,10 @@ impl ResolverCore {
             //
             .or_else(move |error| {
                 error!(oe_log, "Error getting data"; "error" => LogItem(error));
-                ok(next_backoff_action(&oe_conn_backoff))
+                ok(next_delay_action(
+                    &oe_conn_backoff,
+                    &oe_check_behavior
+                ))
             })
             })
             .map_err(|e| panic!("delay errored; err: {:?}", e))
@@ -1172,15 +1283,15 @@ mod test {
     //
     quickcheck! {
         fn prop_zk_connect_string_parse(
-            connect_string: ZkConnectString
+            conn_str: ZkConnectString
         ) -> bool
         {
             //
             // We expect an error only if the input string was zero-length
             //
-            match ZkConnectString::from_str(&connect_string.to_string()) {
-                Ok(cs) => cs == connect_string,
-                _ => connect_string.to_string() == ""
+            match ZkConnectString::from_str(&conn_str.to_string()) {
+                Ok(cs) => cs == conn_str,
+                _ => conn_str.to_string() == ""
             }
         }
     }

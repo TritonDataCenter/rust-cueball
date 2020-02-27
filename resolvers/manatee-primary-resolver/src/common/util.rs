@@ -178,7 +178,8 @@ impl TestContext {
     ) -> Result<(), TestError> {
         self.rt.block_on(
             ZooKeeper::connect(
-                self.connect_string
+                &self
+                    .connect_string
                     .get_addr_at(0)
                     .expect("Empty connect string"),
             )
@@ -206,7 +207,8 @@ impl TestContext {
     ) -> Result<(), TestError> {
         self.rt.block_on(
             ZooKeeper::connect(
-                self.connect_string
+                &self
+                    .connect_string
                     .get_addr_at(0)
                     .expect("Empty connect string"),
             )
@@ -225,7 +227,8 @@ impl TestContext {
     fn delete_zk_node(&mut self, path: String) -> Result<(), TestError> {
         self.rt.block_on(
             ZooKeeper::connect(
-                self.connect_string
+                &self
+                    .connect_string
                     .get_addr_at(0)
                     .expect("Empty connect string"),
             )

@@ -167,7 +167,7 @@ impl ZkConnectString {
     /// if the index is out of bounds.
     ///
     fn get_addr_at(&self, index: usize) -> Option<SocketAddr> {
-        self.0.get(index).copied()
+        self.0.get(index).cloned()
     }
 
     ///
@@ -210,6 +210,13 @@ impl FromStr for ZkConnectString {
     }
 }
 
+//
+// Encapsulates a ZkConnectString with some bookkeeping to keep track of which
+// address the resolver should attempt to connect to next, and how many
+// connection attempts have failed in a row. Provides methods for getting the
+// next address, resetting the number of failed attempts, and checking if
+// the resolver should wait before trying to connect again.
+//
 #[derive(Debug, Clone)]
 struct ZkConnectStringState {
     conn_str: ZkConnectString,
@@ -475,6 +482,9 @@ impl ResolverBackoff {
     }
 }
 
+//
+// For use as argument to next_delay().
+//
 #[derive(Debug, Clone)]
 enum DelayBehavior {
     AlwaysWait,

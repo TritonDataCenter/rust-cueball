@@ -40,6 +40,8 @@ use futures::future::{loop_fn, ok, Either, Future, Loop};
 use futures::stream::Stream;
 use itertools::Itertools;
 use lazy_static::lazy_static;
+use rand;
+use rand::Rng;
 use serde::Deserialize;
 use serde_json;
 use serde_json::Value as SerdeJsonValue;
@@ -226,9 +228,12 @@ struct ZkConnectStringState {
 
 impl ZkConnectStringState {
     fn new(conn_str: ZkConnectString) -> Self {
+        let mut rng = rand::thread_rng();
+        let idx: usize = rng.gen_range(0, conn_str.len());
+
         ZkConnectStringState {
             conn_str,
-            curr_idx: 0,
+            curr_idx: idx,
             conn_attempts: 0,
         }
     }
@@ -930,7 +935,7 @@ impl ResolverCore {
                 let addr = state.next_addr();
                 drop(state);
 
-                info!(log, "Connecting to ZooKeeper"; "addr" => LogItem(addr));
+                info!(log, "Connecting to ZooKeeper"; "addr" => addr);
 
                 //
                 // We expect() the result of get_addr_at() because we anticipate
@@ -942,7 +947,7 @@ impl ResolverCore {
                     .timeout(TCP_CONNECT_TIMEOUT)
                     .and_then(move |(zk, default_watcher)| {
                         info!(log, "Connected to ZooKeeper";
-                            "addr" => LogItem(addr));
+                            "addr" => addr);
 
                         //
                         // We've connected successfully, so reset the

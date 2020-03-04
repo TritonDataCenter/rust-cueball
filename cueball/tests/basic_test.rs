@@ -405,7 +405,7 @@ fn connection_pool_no_backends() {
     let sleep_time = time::Duration::from_millis(5000);
     thread::sleep(sleep_time);
 
-    // we should only get here if the pool rebalance panics due 
-    // to divide-by-zero
+    // we should only get here if the pool rebalance does not panic because 
+    // there are no connections.
     assert!(true);
 }

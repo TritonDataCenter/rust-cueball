@@ -387,7 +387,6 @@ fn connection_pool_decoherence() {
 
 #[test]
 fn connection_pool_no_backends() {
-   
     let resolver = FakeResolver::new(vec![]);
 
     let pool_opts = ConnectionPoolOptions {
@@ -405,7 +404,6 @@ fn connection_pool_no_backends() {
     let sleep_time = time::Duration::from_millis(5000);
     thread::sleep(sleep_time);
 
-    // we should only get here if the pool rebalance does not panic because 
-    // there are no connections.
+    // we should only get here if the pool rebalance does not panic
     assert!(true);
 }

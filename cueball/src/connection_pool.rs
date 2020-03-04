@@ -802,8 +802,8 @@ where
     let backend_count = connection_data.backends.len();
     info!(log, "Backend count: {}", &backend_count);
     if backend_count == 0 {
-       warn!(log, "Not running rebalance, no backends.");
-       return Ok(None)
+        warn!(log, "Not running rebalance, no backends.");
+        return Ok(None);
     }
 
     // Calculate a new connection distribution over the set of available

@@ -1,6 +1,6 @@
 # rust-cueball changelog
 
-Known issues:
+## 0.3.3
 
 - [joyent/rust-cueball#24] Rebalance with no backends can cause a crash
 

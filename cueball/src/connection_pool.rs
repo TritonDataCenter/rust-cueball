@@ -799,6 +799,13 @@ where
         connection_data.connections.len()
     );
 
+    let backend_count = connection_data.backends.len();
+    info!(log, "Backend count: {}", &backend_count);
+    if backend_count == 0 {
+        warn!(log, "Not running rebalance, no backends.");
+        return Ok(None);
+    }
+
     // Calculate a new connection distribution over the set of available
     // backends and determine what additional connections need to be created and
     // what connections can be deemed unwanted.
@@ -831,8 +838,6 @@ where
 
     // Calculate the new connection distribution counts for the available
     // backends
-    let backend_count = connection_data.backends.len();
-    info!(log, "Backend count: {}", &backend_count);
     let connections_per_backend = max_connections as usize / backend_count;
     let mut connections_per_backend_rem =
         max_connections as usize % backend_count;

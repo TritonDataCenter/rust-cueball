@@ -384,3 +384,26 @@ fn connection_pool_decoherence() {
         assert!(stats.total_connections == max_connections);
     }
 }
+
+#[test]
+fn connection_pool_no_backends() {
+    let resolver = FakeResolver::new(vec![]);
+
+    let pool_opts = ConnectionPoolOptions {
+        max_connections: Some(1),
+        claim_timeout: Some(1000),
+        log: None,
+        rebalancer_action_delay: None,
+        decoherence_interval: Some(10000),
+        connection_check_interval: Some(1),
+    };
+
+    let _pool = ConnectionPool::new(pool_opts, resolver, DummyConnection::new);
+
+    // sleep so that rebalance can run
+    let sleep_time = time::Duration::from_millis(5000);
+    thread::sleep(sleep_time);
+
+    // we should only get here if the pool rebalance does not panic
+    assert!(true);
+}

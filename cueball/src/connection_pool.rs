@@ -775,8 +775,8 @@ where
 {
     let mut connection_data = protected_data.connection_data_lock();
 
-    if !connection_data.backends.contains_key(&msg.0) {
-        debug!(log, "Added backend with key {}", &msg.0);
+    if connection_data.backends.contains_key(&msg.0) {
+        debug!(log, "Removing backend with key {}", &msg.0);
         connection_data.backends.remove(&msg.0);
         Some(BackendAction::BackendRemoved)
     } else {

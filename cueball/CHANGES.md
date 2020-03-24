@@ -1,5 +1,9 @@
 # rust-cueball changelog
 
+## not yet released
+
+- [joyent/rust-cueball#43] Logic inversion in remove_backend function
+
 ## 0.3.3
 
 - [joyent/rust-cueball#24] Rebalance with no backends can cause a crash

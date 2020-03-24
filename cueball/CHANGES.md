@@ -1,6 +1,6 @@
 # rust-cueball changelog
 
-## not yet released
+## 0.3.4
 
 - [joyent/rust-cueball#43] Logic inversion in remove_backend function
 

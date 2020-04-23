@@ -115,7 +115,7 @@ impl From<PostgresConnectionConfig> for String {
         let host = config.host.unwrap_or_else(|| String::from("localhost"));
         let port = config
             .port
-            .and_then(|p| Some(p.to_string()))
+            .map(|p| p.to_string())
             .unwrap_or_else(|| "".to_string());
 
         let colon = if port.is_empty() { "" } else { ":" };

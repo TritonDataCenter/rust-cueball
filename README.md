@@ -210,3 +210,7 @@ may be useful to anyone looking to get started with `cueball`:
 
 * [`cueball-postgres-connection`](https://github.com/joyent/rust-cueball/tree/master/connections/postgres-connection)
 * [`cueball-tcp-stream-connection`](https://github.com/joyent/rust-cueball/tree/master/connections/tcp-stream-connection)
+
+## Minimum Supported Rust Version
+
+The current minimum supported rust veresion is 1.39.

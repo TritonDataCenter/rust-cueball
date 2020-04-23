@@ -1,4 +1,4 @@
-// Copyright 2019 Joyent, Inc.
+// Copyright 2020 Joyent, Inc.
 
 //! A multi-node service connection pool
 //!
@@ -150,39 +150,37 @@
 //! use cueball::error::Error;
 //! use cueball::resolver::{BackendAddedMsg, BackendMsg, Resolver};
 //!
-//! fn main() {
-//!     let plain = slog_term::PlainSyncDecorator::new(std::io::stdout());
-//!     let log = Logger::root(
-//!         Mutex::new(
-//!             slog_term::FullFormat::new(plain).build()
-//!         ).fuse(),
-//!         o!("build-id" => "0.1.0")
-//!     );
+//! let plain = slog_term::PlainSyncDecorator::new(std::io::stdout());
+//! let log = Logger::root(
+//!     Mutex::new(
+//!         slog_term::FullFormat::new(plain).build()
+//!     ).fuse(),
+//!     o!("build-id" => "0.1.0")
+//! );
 //!
-//!     let be1 = (IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 55555);
-//!     let be2 = (IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 55556);
-//!     let be3 = (IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 55557);
+//! let be1 = (IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 55555);
+//! let be2 = (IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 55556);
+//! let be3 = (IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 55557);
 //!
-//!     let resolver = FakeResolver::new(vec![be1, be2, be3]);
+//! let resolver = FakeResolver::new(vec![be1, be2, be3]);
 //!
-//!     let pool_opts = ConnectionPoolOptions::<FakeResolver> {
-//!         max_connections: 15,
-//!         claim_timeout: Some(1000)
-//!         resolver: resolver,
-//!         log: log.clone(),
-//!         decoherence_interval: None,
-//!     };
+//! let pool_opts = ConnectionPoolOptions::<FakeResolver> {
+//!     max_connections: 15,
+//!     claim_timeout: Some(1000)
+//!     resolver: resolver,
+//!     log: log.clone(),
+//!     decoherence_interval: None,
+//! };
 //!
-//!     let pool = ConnectionPool::<DummyConnection, FakeResolver>::new(pool_opts);
+//! let pool = ConnectionPool::<DummyConnection, FakeResolver>::new(pool_opts);
 //!
-//!     for _ in 0..10 {
-//!         let pool = pool.clone();
-//!         thread::spawn(move || {
-//!             let conn = pool.claim()?;
-//!             // Do stuff here
-//!             // The connection is returned to the pool when it falls out of scope.
-//!         })
-//!     }
+//! for _ in 0..10 {
+//!     let pool = pool.clone();
+//!     thread::spawn(move || {
+//!         let conn = pool.claim()?;
+//!         // Do stuff here
+//!         // The connection is returned to the pool when it falls out of scope.
+//!     })
 //! }
 //! ```
 //!

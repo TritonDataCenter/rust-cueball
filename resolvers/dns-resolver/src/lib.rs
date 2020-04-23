@@ -464,7 +464,7 @@ impl PollResolverFSM for ResolverFSM {
 
         context.srvs.clear();
 
-        context.backends = new_backends.clone();
+        context.backends = new_backends;
 
         transition!(Sleep)
     }

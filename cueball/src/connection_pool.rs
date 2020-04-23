@@ -867,7 +867,7 @@ where
             });
         let old_connection_count = connection_distribution
             .get(b)
-            .and_then(|count_ref| Some(*count_ref))
+            .copied()
             .unwrap_or_else(|| ConnectionCount::from(0));
 
         debug!(

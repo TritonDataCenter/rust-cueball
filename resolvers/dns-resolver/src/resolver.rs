@@ -210,7 +210,9 @@ impl PollResolverFSM for ResolverFSM {
                 .map_err(|e| ResolverError::DnsClientError {
                     err: e.to_string(),
                 })
-                .or_else(|_| configure_default_resolvers(&mut context.resolvers))
+                .or_else(|_| {
+                    configure_default_resolvers(&mut context.resolvers)
+                })
                 .ok();
         }
 

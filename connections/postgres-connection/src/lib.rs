@@ -46,12 +46,12 @@ impl Connection for PostgresConnection {
     type Error = postgres::Error;
 
     fn connect(&mut self) -> Result<(), Self::Error> {
-        let tls_connector = make_tls_connector(&self.tls_config);
-        let connection = if tls_connector.is_some() {
-            Client::connect(&self.url, tls_connector.unwrap())?
-        } else {
-            Client::connect(&self.url, NoTls)?
-        };
+        let connection =
+            if let Some(tls_connector) = make_tls_connector(&self.tls_config) {
+                Client::connect(&self.url, tls_connector)?
+            } else {
+                Client::connect(&self.url, NoTls)?
+            };
         self.connection = Some(connection);
         self.connected = true;
         Ok(())
@@ -115,7 +115,7 @@ impl From<PostgresConnectionConfig> for String {
         let host = config.host.unwrap_or_else(|| String::from("localhost"));
         let port = config
             .port
-            .and_then(|p| Some(p.to_string()))
+            .map(|p| p.to_string())
             .unwrap_or_else(|| "".to_string());
 
         let colon = if port.is_empty() { "" } else { ":" };

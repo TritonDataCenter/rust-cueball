@@ -1,6 +1,6 @@
 // Copyright 2020 Joyent, Inc.
 
-//dns resolver is a library for resolving DNS records for cueball.
+// DNS resolver, a library providing SRV DNS records for cueball.
 use std::collections::HashMap;
 use std::convert::From;
 use std::net::IpAddr;
@@ -34,7 +34,6 @@ pub enum BackendAction {
 pub struct DnsResolver {
     domain: String,
     service: String,
-    //    resolv_conf: Option<String>,
     resolvers: Option<Vec<Arc<dyn DnsClient + Send + Sync>>>,
     log: Logger,
 }
@@ -49,9 +48,6 @@ impl DnsResolver {
         DnsResolver {
             domain,
             service,
-            //            resolv_conf: Some(
-            //                resolv_conf.unwrap_or(DEFAULT_RESOLV_CONF.to_string()),
-            //            ),
             resolvers: resolvers,
             log: log.clone(),
         }
@@ -80,7 +76,6 @@ impl Resolver for DnsResolver {
         let resolver = ResolverFSM::start(ResolverContext {
             resolvers: self.resolvers.as_ref().unwrap().to_vec(),
             backends: HashMap::new(),
-            //    resolv_conf: self.resolv_conf.as_ref().unwrap().to_string(),
             srv: srv_rec,
             srvs: Vec::new(),
             srv_rem: Vec::new(),
@@ -212,10 +207,11 @@ impl PollResolverFSM for ResolverFSM {
         if context.resolvers.is_empty() {
             info!(context.log, "Configuring from resolv.conf");
             configure_from_resolv_conf(&mut context.resolvers)
+                .map_err(|e| ResolverError::DnsClientError {
+                    err: e.to_string(),
+                })
                 .or(configure_default_resolvers(&mut context.resolvers))
-                .or_else(|e| {
-                    Err(ResolverError::DnsClientError { err: e.to_string() })
-                });
+                .ok();
         }
 
         transition!(Srv)
@@ -536,6 +532,19 @@ fn test_resolver() {
     let (sender, receiver) = channel();
 
     dr.run(sender);
-    let resp = receiver.recv();
-    assert!(resp.is_ok());
+    let backend_msg = match receiver.recv() {
+        Ok(BackendMsg::AddedMsg(added_msg)) => Ok(added_msg),
+        Ok(BackendMsg::RemovedMsg(_removed_msg)) => Err(()),
+        Ok(BackendMsg::StopMsg) => Err(()),
+        Ok(BackendMsg::HeartbeatMsg) => Err(()),
+        Err(_recv_err) => Err(()),
+    };
+    match backend_msg {
+        Ok(r) => {
+            assert_eq!(r.backend.address.to_string(), "1.2.3.4");
+            assert_eq!(r.backend.port, 123);
+        }
+        Err(_) => assert!(false),
+    }
+    //assert!(resp.is_ok());
 }

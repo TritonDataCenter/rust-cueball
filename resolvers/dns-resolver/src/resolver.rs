@@ -48,7 +48,7 @@ impl DnsResolver {
         DnsResolver {
             domain,
             service,
-            resolvers: resolvers,
+            resolvers: Some(resolvers.unwrap_or(Vec::new())),
             log: log.clone(),
         }
     }
@@ -350,10 +350,12 @@ impl PollResolverFSM for ResolverFSM {
         if new_backends.keys().len() == 0 {
             info!(
                 context.log,
-                "found no DNS records for {}.{}",
+                "found no DNS records for {}.{}, next service: {:?}",
                 context.service,
-                context.domain
+                context.domain,
+                context.next_service
             );
+            context.srvs.clear();
             transition!(Sleep)
         }
 
@@ -407,7 +409,7 @@ fn resolve_srv_records(
         for srv in srv_resp.answers.iter() {
             let ttl = srv.ttl;
             let now: DateTime<Utc> = Utc::now();
-            let next: i64 = now.timestamp() + i64::from(1000 * ttl);
+            let next: i64 = now.timestamp() + i64::from(ttl);
             let next_service = NaiveDateTime::from_timestamp(next, 0);
             context.last_srv_ttl = Some(ttl);
             context.next_service = Some(next_service);
@@ -424,9 +426,10 @@ fn resolve_srv_records(
     }
     if context.srvs.len() == 0 {
         let now: DateTime<Utc> = Utc::now();
-        let next: i64 = now.timestamp() + i64::from(1000 * 60 * 60);
+        let next: i64 = now.timestamp() + i64::from(5);
         let next_service = NaiveDateTime::from_timestamp(next, 0);
-
+        debug!(context.log, "setting next service to {:?}", next_service);
+        context.next_service = Some(next_service);
         let lookup_name = SrvRec {
             name: name.to_string(),
             port: 80,
@@ -495,7 +498,7 @@ fn test_resolver() {
             srv_resp.answers.push(SrvRecord {
                 port: 123,
                 priority: 1,
-                target: "_tcp.cheesy_srv_record.joyent.us".to_string(),
+                target: "_tcp.cheesy_record.joyent.us".to_string(),
                 ttl: 60,
                 weight: 100,
             });
@@ -509,7 +512,7 @@ fn test_resolver() {
         ) -> Result<ARecordResp, ResolverError> {
             let mut a_resp = ARecordResp::default();
             a_resp.answers.push(ARecord {
-                name: "cheesy_a_record".to_string(),
+                name: "cheesy_record.joyent.us".to_string(),
                 ttl: 60,
                 address: "1.2.3.4".parse::<IpAddr>()?,
             });
@@ -523,10 +526,10 @@ fn test_resolver() {
     info!(log, "running basic cueball resolver example");
 
     let mut dr = DnsResolver::new(
-        "buckets-mdplacement.jonran-region.joyent.us.".to_string(),
-        "_buckets-mdplacement._tcp".to_string(),
+        "cheesy_record.joyent.us.".to_string(),
+        "_tcp".to_string(),
         Some(resolvers),
-        log,
+        log.clone(),
     );
 
     let (sender, receiver) = channel();
@@ -534,10 +537,7 @@ fn test_resolver() {
     dr.run(sender);
     let backend_msg = match receiver.recv() {
         Ok(BackendMsg::AddedMsg(added_msg)) => Ok(added_msg),
-        Ok(BackendMsg::RemovedMsg(_removed_msg)) => Err(()),
-        Ok(BackendMsg::StopMsg) => Err(()),
-        Ok(BackendMsg::HeartbeatMsg) => Err(()),
-        Err(_recv_err) => Err(()),
+        _ => Err(()),
     };
     match backend_msg {
         Ok(r) => {
@@ -546,5 +546,4 @@ fn test_resolver() {
         }
         Err(_) => assert!(false),
     }
-    //assert!(resp.is_ok());
 }

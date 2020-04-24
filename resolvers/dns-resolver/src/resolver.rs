@@ -48,7 +48,7 @@ impl DnsResolver {
         DnsResolver {
             domain,
             service,
-            resolvers: Some(resolvers.unwrap_or(Vec::new())),
+            resolvers: Some(resolvers.unwrap_or_default()),
             log: log.clone(),
         }
     }
@@ -210,7 +210,7 @@ impl PollResolverFSM for ResolverFSM {
                 .map_err(|e| ResolverError::DnsClientError {
                     err: e.to_string(),
                 })
-                .or(configure_default_resolvers(&mut context.resolvers))
+                .or_else(|_| configure_default_resolvers(&mut context.resolvers))
                 .ok();
         }
 
@@ -379,7 +379,7 @@ impl PollResolverFSM for ResolverFSM {
 
         context.srvs.clear();
 
-        context.backends = new_backends.clone();
+        context.backends = new_backends;
 
         transition!(Sleep)
     }
@@ -424,7 +424,7 @@ fn resolve_srv_records(
             debug!(context.log, "context srvs: {:?}", context.srvs);
         }
     }
-    if context.srvs.len() == 0 {
+    if context.srvs.is_empty() {
         let now: DateTime<Utc> = Utc::now();
         let next: i64 = now.timestamp() + i64::from(5);
         let next_service = NaiveDateTime::from_timestamp(next, 0);

@@ -18,7 +18,7 @@ use crate::resolver::ResolverError;
 
 static DEFAULT_RESOLV_CONF: &str = "/etc/resolv.conf";
 const DEFAULT_DNS_PORT: u16 = 53;
-const DEFAULT_RESOLVERS: &'static [&'static str] = &["8.8.8.8", "8.8.4.4"];
+const DEFAULT_RESOLVERS: &[&str] = &["8.8.8.8", "8.8.4.4"];
 
 #[derive(Debug)]
 pub struct ARecord {
@@ -140,7 +140,7 @@ pub fn configure_default_resolvers(
     resolvers: &mut Vec<Arc<dyn DnsClient + Send + Sync>>,
 ) -> Result<(), ResolverError> {
     for ns in DEFAULT_RESOLVERS.iter() {
-        let res = format!("{}:{}", ns.to_string(), DEFAULT_DNS_PORT);
+        let res = format!("{}:{}", (*ns).to_string(), DEFAULT_DNS_PORT);
         let resolver = init_dns_client(&res)?;
         resolvers.push(resolver);
     }
@@ -152,7 +152,7 @@ pub fn configure_from_resolv_conf(
 ) -> Result<(), ResolverError> {
     let mut buf = Vec::new();
     let mut f = File::open(DEFAULT_RESOLV_CONF)?;
-    f.read_to_end(&mut buf)?;
+    f.read_exact(&mut buf)?;
     let cfg = match resolv_conf::Config::parse(&buf) {
         Ok(c) => c,
         Err(e) => {

@@ -206,11 +206,13 @@ impl PollResolverFSM for ResolverFSM {
     ) -> Poll<AfterCheckNs, ResolverError> {
         if context.resolvers.is_empty() {
             info!(context.log, "Configuring from resolv.conf");
-            configure_from_resolv_conf(&mut context.resolvers)
+            let log = &context.log.clone();
+            configure_from_resolv_conf(&mut context.resolvers, log)
                 .map_err(|e| ResolverError::DnsClientError {
                     err: e.to_string(),
                 })
                 .or_else(|_| {
+                    info!(context.log, "using default resolvers");
                     configure_default_resolvers(&mut context.resolvers)
                 })
                 .ok();
@@ -406,7 +408,15 @@ fn resolve_srv_records(
     context: &mut ResolverContext,
 ) -> Result<(), ResolverError> {
     for resolver in context.resolvers.iter_mut() {
-        let srv_resp = resolver.query_srv(&name, &context.log)?;
+        let srv_resp = match resolver.query_srv(&name, &context.log) {
+            Ok(r) => r,
+            Err(e) => {
+                error!(context.log,
+                       "failed to resolver srv: {}, trying next resolver",
+                       e.to_string());
+                continue;
+            }
+        };
         debug!(context.log, "srv_response: {:?}", srv_resp);
         for srv in srv_resp.answers.iter() {
             let ttl = srv.ttl;
@@ -448,7 +458,15 @@ fn resolve_a_records(
 ) -> Result<(), ResolverError> {
     debug!(context.log, "querying a record for {:?}", context.srv.name);
     for resolver in context.resolvers.iter_mut() {
-        let a_resp = resolver.query_a(&context.srv.name, &context.log)?;
+        let a_resp = match resolver.query_a(&context.srv.name, &context.log) {
+            Ok(r) => r,
+            Err(e) => {
+                error!(context.log,
+                       "error resolving a record: {}, trying next resolver",
+                       e.to_string());
+                continue;
+            }
+        };
         debug!(context.log, "a resp: {:?}", a_resp);
         for a in a_resp.answers.iter() {
             let addr = a.address.to_string().parse::<IpAddr>()?;

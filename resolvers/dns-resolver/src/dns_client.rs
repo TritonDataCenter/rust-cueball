@@ -1,6 +1,6 @@
 // Copyright 2020 Joyent, Inc
 
-use slog::{debug, Logger};
+use slog::{debug, info, Logger};
 use std::fs::File;
 use std::io::Read;
 use std::net::IpAddr;
@@ -149,18 +149,21 @@ pub fn configure_default_resolvers(
 
 pub fn configure_from_resolv_conf(
     resolvers: &mut Vec<Arc<dyn DnsClient + Send + Sync>>,
+    log: &Logger
 ) -> Result<(), ResolverError> {
     let mut buf = Vec::new();
     let mut f = File::open(DEFAULT_RESOLV_CONF)?;
-    f.read_exact(&mut buf)?;
+    f.read_to_end(&mut buf)?;
     let cfg = match resolv_conf::Config::parse(&buf) {
         Ok(c) => c,
         Err(e) => {
             return Err(ResolverError::ResolvConfInvalid { err: e.to_string() })
         }
     };
+    info!(log, "Read {}, found {} resolvers", DEFAULT_RESOLV_CONF, cfg.nameservers.len());
     for ns in cfg.nameservers.iter() {
         let res = format!("{}:{}", ns.to_string(), 53);
+        debug!(log, "adding resolver: {}", res);
         let resolver = init_dns_client(&res)?;
         resolvers.push(resolver);
     }

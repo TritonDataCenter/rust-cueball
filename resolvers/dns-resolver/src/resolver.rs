@@ -184,11 +184,10 @@ impl PollResolverFSM for ResolverFSM {
         context: &'c mut RentToOwn<'c, ResolverContext>,
     ) -> Poll<AfterCheckNs, ResolverError> {
         if context.resolvers.is_empty() {
-            info!(context.log, "Configuring from resolv.conf");
+            info!(context.log, "Configuring from /etc/resolv.conf");
             let log = &context.log.clone();
-            let mut cfg = String::new();
-            read_resolv_conf(&mut cfg)?;
-            configure_resolvers(&mut cfg, &mut context.resolvers, log)?;
+            let cfg = &read_resolv_conf()?;
+            configure_resolvers(&cfg, &mut context.resolvers, log)?;
         }
 
         transition!(Srv)

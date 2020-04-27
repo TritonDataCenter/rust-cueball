@@ -1,9 +1,8 @@
 // Copyright 2020 Joyent, Inc
 
 use slog::{debug, info, Logger};
-use std::fs::File;
+use std::fs;
 use std::io;
-use std::io::Read;
 use std::net::IpAddr;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -138,7 +137,6 @@ pub fn init_dns_client(
 }
 
 pub fn configure_resolvers(
-    //buf: &Vec<u8>,
     buf: &str,
     resolvers: &mut Vec<Arc<dyn DnsClient + Send + Sync>>,
     log: &Logger,
@@ -146,17 +144,14 @@ pub fn configure_resolvers(
     let nameservers = parse_ns_resolv_conf(&buf)?;
     for ns in nameservers.iter() {
         let res = format!("{}:{}", ns.to_string(), 53);
-        info!(log, "adding resolver: {}", res);
         let resolver = init_dns_client(&res)?;
+        info!(log, "Found resolver: {}", res);
         resolvers.push(resolver);
     }
     Ok(())
 }
 
-pub fn parse_ns_resolv_conf(
-    //buf: &Vec<u8>,
-    buf: &str,
-) -> Result<Vec<IpAddr>, ResolverError> {
+pub fn parse_ns_resolv_conf(buf: &str) -> Result<Vec<IpAddr>, ResolverError> {
     let cfg = match Config::parse(&buf) {
         Ok(c) => c,
         Err(e) => {
@@ -171,11 +166,9 @@ pub fn parse_ns_resolv_conf(
     Ok(nameservers)
 }
 
-pub fn read_resolv_conf(cfg: &mut str) -> io::Result<()> {
-    let mut f = File::open(DEFAULT_RESOLV_CONF)?;
-    let mut buf = cfg.as_bytes().iter().cloned().collect();
-    f.read_to_end(&mut buf)?;
-    Ok(())
+pub fn read_resolv_conf() -> Result<String, io::Error> {
+    let buf = fs::read(DEFAULT_RESOLV_CONF)?;
+    Ok(std::str::from_utf8(&buf).unwrap().to_string())
 }
 
 #[test]

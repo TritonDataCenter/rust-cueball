@@ -2,10 +2,13 @@
 
 use slog::{debug, info, Logger};
 use std::fs::File;
+use std::io;
 use std::io::Read;
 use std::net::IpAddr;
+use std::str::FromStr;
 use std::sync::Arc;
 
+use resolv_conf::Config;
 use trust_dns_client::client::{Client, SyncClient};
 use trust_dns_client::error::ClientError;
 use trust_dns_client::op::ResponseCode;
@@ -17,8 +20,6 @@ use trust_dns_proto::rr::domain::Name;
 use crate::resolver::ResolverError;
 
 static DEFAULT_RESOLV_CONF: &str = "/etc/resolv.conf";
-const DEFAULT_DNS_PORT: u16 = 53;
-const DEFAULT_RESOLVERS: &[&str] = &["8.8.8.8", "8.8.4.4"];
 
 #[derive(Debug)]
 pub struct ARecord {
@@ -136,36 +137,116 @@ pub fn init_dns_client(
     }
 }
 
-pub fn configure_default_resolvers(
+pub fn configure_resolvers(
+    //buf: &Vec<u8>,
+    buf: &str,
     resolvers: &mut Vec<Arc<dyn DnsClient + Send + Sync>>,
+    log: &Logger,
 ) -> Result<(), ResolverError> {
-    for ns in DEFAULT_RESOLVERS.iter() {
-        let res = format!("{}:{}", (*ns).to_string(), DEFAULT_DNS_PORT);
+    let nameservers = parse_ns_resolv_conf(&buf)?;
+    for ns in nameservers.iter() {
+        let res = format!("{}:{}", ns.to_string(), 53);
+        info!(log, "adding resolver: {}", res);
         let resolver = init_dns_client(&res)?;
         resolvers.push(resolver);
     }
     Ok(())
 }
 
-pub fn configure_from_resolv_conf(
-    resolvers: &mut Vec<Arc<dyn DnsClient + Send + Sync>>,
-    log: &Logger
-) -> Result<(), ResolverError> {
-    let mut buf = Vec::new();
-    let mut f = File::open(DEFAULT_RESOLV_CONF)?;
-    f.read_to_end(&mut buf)?;
-    let cfg = match resolv_conf::Config::parse(&buf) {
+pub fn parse_ns_resolv_conf(
+    //buf: &Vec<u8>,
+    buf: &str,
+) -> Result<Vec<IpAddr>, ResolverError> {
+    let cfg = match Config::parse(&buf) {
         Ok(c) => c,
         Err(e) => {
             return Err(ResolverError::ResolvConfInvalid { err: e.to_string() })
         }
     };
-    info!(log, "Read {}, found {} resolvers", DEFAULT_RESOLV_CONF, cfg.nameservers.len());
-    for ns in cfg.nameservers.iter() {
-        let res = format!("{}:{}", ns.to_string(), 53);
-        debug!(log, "adding resolver: {}", res);
-        let resolver = init_dns_client(&res)?;
-        resolvers.push(resolver);
+    let mut nameservers = Vec::new();
+    for ns in cfg.nameservers {
+        let addr = IpAddr::from_str(&ns.to_string())?;
+        nameservers.push(addr);
     }
+    Ok(nameservers)
+}
+
+pub fn read_resolv_conf(cfg: &mut str) -> io::Result<()> {
+    let mut f = File::open(DEFAULT_RESOLV_CONF)?;
+    let mut buf = cfg.as_bytes().iter().cloned().collect();
+    f.read_to_end(&mut buf)?;
     Ok(())
+}
+
+#[test]
+fn test_ns_resolv_conf_good_config() {
+    let config_str = "
+options ndots:8 timeout:8 attempts:8
+
+domain joyent.us
+search joyent.us
+
+nameserver 10.77.77.92
+nameserver 10.77.77.75
+nameserver 10.77.77.88
+
+options rotate
+options inet6 no-tld-query
+
+sortlist 130.155.160.0/255.255.240.0 130.155.0.0";
+
+    let resolvers = match parse_ns_resolv_conf(&config_str) {
+        Ok(r) => r,
+        Err(_e) => {
+            assert!(false);
+            Vec::new()
+        }
+    };
+    assert_eq!(resolvers.len(), 3);
+}
+
+#[test]
+fn test_ns_resolv_conf_no_resolvers() {
+    let config_str = "
+options ndots:8 timeout:8 attempts:8
+
+domain joyent.us
+search joyent.us
+
+options rotate
+options inet6 no-tld-query
+
+sortlist 130.155.160.0/255.255.240.0 130.155.0.0";
+
+    let resolvers = match parse_ns_resolv_conf(&config_str) {
+        Ok(r) => r,
+        Err(_e) => {
+            assert!(false);
+            Vec::new()
+        }
+    };
+    assert_eq!(resolvers.len(), 0);
+}
+
+#[test]
+fn test_ns_resolv_conf_mangled_config() {
+    let config_str = "
+options ndots:8 timeout:8 attempts:8
+
+domain joyent.us
+search joyent.us
+
+cheese 1.2.3.4
+
+options rotate
+options inet6 no-tld-query
+
+sortlist 130.155.160.0/255.255.240.0 130.155.0.0";
+
+    match parse_ns_resolv_conf(&config_str) {
+        Ok(_) => assert!(false),
+        Err(e) => {
+            assert_eq!(e.to_string(), "Resolver configuration parsing failure");
+        }
+    };
 }

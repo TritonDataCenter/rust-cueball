@@ -19,18 +19,12 @@ use state_machine_future::{transition, RentToOwn, StateMachineFuture};
 use thiserror::Error;
 use tokio::prelude::*;
 
-use crate::dns_client::configure_default_resolvers;
-use crate::dns_client::configure_from_resolv_conf;
+use crate::dns_client::configure_resolvers;
+use crate::dns_client::read_resolv_conf;
 use crate::dns_client::DnsClient;
 
-#[derive(Debug)]
-pub struct BackendRemovedMsg(pub backend::BackendKey);
-
-pub enum BackendAction {
-    BackendAdded,
-    BackendRemoved,
-}
-
+// DNS resolver; pass in the SRV record, and optional
+// resolver vector.
 pub struct DnsResolver {
     domain: String,
     service: String,
@@ -56,23 +50,8 @@ impl DnsResolver {
 
 impl Resolver for DnsResolver {
     fn run(&mut self, s: Sender<BackendMsg>) {
-        let srv_retry_params = RetryParams {
-            max: 0,
-            count: 0,
-            timeout: 1000,
-            min_delay: 0,
-            delay: 1000,
-            max_delay: 10000,
-        };
-
-        let srv_rec = SrvRec {
-            name: String::new(),
-            port: 0,
-
-            addresses_v4: Vec::new(),
-            expiry_v4: None,
-        };
-
+        let srv_retry_params = RetryParams::default();
+        let srv_rec = SrvRec::default();
         let resolver = ResolverFSM::start(ResolverContext {
             resolvers: self.resolvers.as_ref().unwrap().to_vec(),
             backends: HashMap::new(),
@@ -94,7 +73,7 @@ impl Resolver for DnsResolver {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 struct RetryParams {
     max: u8,
     count: u8,
@@ -104,7 +83,7 @@ struct RetryParams {
     max_delay: u32,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 struct SrvRec {
     name: String,
     port: u16,
@@ -207,15 +186,9 @@ impl PollResolverFSM for ResolverFSM {
         if context.resolvers.is_empty() {
             info!(context.log, "Configuring from resolv.conf");
             let log = &context.log.clone();
-            configure_from_resolv_conf(&mut context.resolvers, log)
-                .map_err(|e| ResolverError::DnsClientError {
-                    err: e.to_string(),
-                })
-                .or_else(|_| {
-                    info!(context.log, "using default resolvers");
-                    configure_default_resolvers(&mut context.resolvers)
-                })
-                .ok();
+            let mut cfg = String::new();
+            read_resolv_conf(&mut cfg)?;
+            configure_resolvers(&mut cfg, &mut context.resolvers, log)?;
         }
 
         transition!(Srv)
@@ -411,9 +384,11 @@ fn resolve_srv_records(
         let srv_resp = match resolver.query_srv(&name, &context.log) {
             Ok(r) => r,
             Err(e) => {
-                error!(context.log,
-                       "failed to resolver srv: {}, trying next resolver",
-                       e.to_string());
+                error!(
+                    context.log,
+                    "failed to resolver srv: {}, trying next resolver",
+                    e.to_string()
+                );
                 continue;
             }
         };
@@ -461,9 +436,11 @@ fn resolve_a_records(
         let a_resp = match resolver.query_a(&context.srv.name, &context.log) {
             Ok(r) => r,
             Err(e) => {
-                error!(context.log,
-                       "error resolving a record: {}, trying next resolver",
-                       e.to_string());
+                error!(
+                    context.log,
+                    "error resolving a record: {}, trying next resolver",
+                    e.to_string()
+                );
                 continue;
             }
         };

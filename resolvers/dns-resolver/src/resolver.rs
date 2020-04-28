@@ -186,7 +186,7 @@ impl PollResolverFSM for ResolverFSM {
         if context.resolvers.is_empty() {
             info!(context.log, "Configuring from /etc/resolv.conf");
             let log = &context.log.clone();
-            let cfg = &read_resolv_conf()?;
+            let cfg = &read_resolv_conf(None)?;
             configure_resolvers(&cfg, &mut context.resolvers, log)?;
         }
 

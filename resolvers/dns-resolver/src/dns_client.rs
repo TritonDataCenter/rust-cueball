@@ -130,10 +130,8 @@ pub fn init_dns_client(
     resolver: &str,
 ) -> Result<Arc<dyn DnsClient + Send + Sync>, ResolverError> {
     let server = resolver.to_string().parse()?;
-    match UdpClientConnection::new(server) {
-        Ok(conn) => Ok(Arc::new(TrustDnsClient::from(SyncClient::new(conn)))),
-        Err(e) => Err(ResolverError::DnsClientError { err: e.to_string() }),
-    }
+    let conn = UdpClientConnection::new(server)?;
+    Ok(Arc::new(TrustDnsClient::from(SyncClient::new(conn))))
 }
 
 pub fn configure_resolvers(
@@ -166,8 +164,10 @@ pub fn parse_ns_resolv_conf(buf: &str) -> Result<Vec<IpAddr>, ResolverError> {
     Ok(nameservers)
 }
 
-pub fn read_resolv_conf() -> Result<String, io::Error> {
-    let buf = fs::read(DEFAULT_RESOLV_CONF)?;
+pub fn read_resolv_conf(path: Option<String>) -> Result<String, io::Error> {
+    let resolv_conf_path =
+        path.unwrap_or_else(|| DEFAULT_RESOLV_CONF.to_string());
+    let buf = fs::read(resolv_conf_path)?;
     Ok(std::str::from_utf8(&buf).unwrap().to_string())
 }
 
@@ -240,6 +240,19 @@ sortlist 130.155.160.0/255.255.240.0 130.155.0.0";
         Ok(_) => assert!(false),
         Err(e) => {
             assert_eq!(e.to_string(), "Resolver configuration parsing failure");
+        }
+    };
+}
+
+#[test]
+fn test_ns_resolv_conf_empty_config() {
+    let config_str = "";
+    match parse_ns_resolv_conf(&config_str) {
+        Ok(r) => {
+            assert_eq!(r.len(), 0);
+        }
+        Err(_) => {
+            assert!(false);
         }
     };
 }

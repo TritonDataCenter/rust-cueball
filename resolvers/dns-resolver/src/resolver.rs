@@ -385,7 +385,7 @@ fn resolve_srv_records(
             Err(e) => {
                 error!(
                     context.log,
-                    "failed to resolver srv: {}, trying next resolver",
+                    "failed to resolve srv: {}, trying next resolver",
                     e.to_string()
                 );
                 continue;

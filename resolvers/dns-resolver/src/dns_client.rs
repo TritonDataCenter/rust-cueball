@@ -7,6 +7,7 @@ use std::net::IpAddr;
 use std::str::FromStr;
 use std::sync::Arc;
 
+use newtype_derive::NewtypeFrom;
 use resolv_conf::Config;
 use trust_dns_client::client::{Client, SyncClient};
 use trust_dns_client::error::ClientError;

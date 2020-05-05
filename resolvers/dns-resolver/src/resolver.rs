@@ -398,7 +398,7 @@ fn resolve_srv_records(
             debug!(context.log, "srv port: {}", port);
             let lookup_name = SrvRec {
                 name: srv.target.to_string(),
-                port: port,
+                port,
                 addresses_v4: Vec::new(),
                 expiry_v4: Some(next_service),
             };

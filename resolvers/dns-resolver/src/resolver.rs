@@ -13,7 +13,9 @@ use std::vec::Vec;
 use chrono::prelude::*;
 use chrono::{DateTime, Utc};
 use cueball::backend;
-use cueball::resolver::{BackendAddedMsg, BackendMsg, Resolver};
+use cueball::resolver::{
+    BackendAddedMsg, BackendMsg, BackendRemovedMsg, Resolver,
+};
 use slog::{debug, error, info, warn, Logger};
 use state_machine_future::{transition, RentToOwn, StateMachineFuture};
 use thiserror::Error;
@@ -37,6 +39,9 @@ impl DnsResolver {
         domain: String,
         service: String,
         resolvers: Option<Vec<Arc<dyn DnsClient + Send + Sync>>>,
+        /*
+        resolvers: Option<Arc<Vec<dyn DnsClient + Send + Sync>>>,
+        */
         log: Logger,
     ) -> Self {
         DnsResolver {
@@ -330,17 +335,23 @@ impl PollResolverFSM for ResolverFSM {
         let mut removed: HashMap<String, backend::Backend> = HashMap::new();
 
         context.backends.iter().for_each(|(k, v)| {
-            if !new_backends.contains_key(k) {
-                removed.insert(k.to_string(), v.clone());
-            }
+            removed.insert(k.to_string(), v.clone());
         });
 
         new_backends.iter().for_each(|(k, v)| {
             added.insert(k.to_string(), v.clone());
         });
 
-        send_updates(added, context.pool_tx.clone(), context.log.clone());
-        send_updates(removed, context.pool_tx.clone(), context.log.clone());
+        send_added_backends(
+            added,
+            context.pool_tx.clone(),
+            context.log.clone(),
+        );
+        send_removed_backends(
+            removed,
+            context.pool_tx.clone(),
+            context.log.clone(),
+        );
 
         context.srvs.clear();
 
@@ -358,12 +369,9 @@ impl PollResolverFSM for ResolverFSM {
         let min_delay =
             context.next_service.unwrap().signed_duration_since(now);
 
-        info!(
+        debug!(
             context.log,
-            "now: {:?}, next_service: {:?}, duration: {:?}",
-            now,
-            context.next_service.unwrap(),
-            min_delay
+            "sleeping for remainder of ttl: {:?}", min_delay
         );
         thread::sleep(min_delay.to_std().unwrap());
         transition!(Srv)
@@ -462,7 +470,7 @@ fn resolve_a_records(
     Ok(())
 }
 
-fn send_updates(
+fn send_added_backends(
     to_send: HashMap<String, backend::Backend>,
     s: Sender<BackendMsg>,
     log: Logger,
@@ -474,7 +482,23 @@ fn send_updates(
             backend: b.clone(),
         });
         match s.send(backend_msg) {
-            Ok(_) => info!(log, "resolver sent msg: {}", k),
+            Ok(_) => info!(log, "resolver sent added msg: {}", k),
+            Err(e) => warn!(log, "could not msg: {}", e),
+        }
+    });
+}
+
+fn send_removed_backends(
+    to_send: HashMap<String, backend::Backend>,
+    s: Sender<BackendMsg>,
+    log: Logger,
+) {
+    to_send.iter().for_each(|(k, b)| {
+        let backend_key = backend::srv_key(b);
+        let backend_msg =
+            BackendMsg::RemovedMsg(BackendRemovedMsg(backend_key));
+        match s.send(backend_msg) {
+            Ok(_) => info!(log, "resolver sent removed msg: {}", k),
             Err(e) => warn!(log, "could not msg: {}", e),
         }
     });
@@ -557,7 +581,7 @@ fn test_resolver_single_srv() {
 #[test]
 fn test_resolver_multi_srv() {
     use crate::dns_client::{ARecord, ARecordResp, SrvRecord, SrvRecordResp};
-    use slog::{info, o, Drain, Logger};
+    use slog::{o, Drain, Logger};
     use std::sync::mpsc::channel;
     use std::sync::Mutex;
 
@@ -610,7 +634,6 @@ fn test_resolver_multi_srv() {
     let mock_resolvers = MockDnsClient {};
     let mut resolvers: Vec<Arc<dyn DnsClient + Send + Sync>> = Vec::new();
     resolvers.push(Arc::new(mock_resolvers));
-    info!(log, "running basic cueball resolver example");
 
     let mut dr = DnsResolver::new(
         "cheesy_record.joyent.us.".to_string(),
@@ -635,5 +658,95 @@ fn test_resolver_multi_srv() {
             }
             Err(_) => assert!(false),
         }
+    }
+}
+
+#[test]
+fn test_resolver_interval() {
+    use crate::dns_client::{ARecord, ARecordResp, SrvRecord, SrvRecordResp};
+    use slog::{o, Drain, Logger};
+    use std::sync::mpsc::channel;
+    use std::sync::Mutex;
+
+    let plain = slog_term::PlainSyncDecorator::new(std::io::stdout());
+    let log = Logger::root(
+        Mutex::new(slog_term::FullFormat::new(plain).build()).fuse(),
+        o!("build-id" => "0.0.1"),
+    );
+
+    struct MockDnsClient {}
+    impl DnsClient for MockDnsClient {
+        fn query_srv(
+            &self,
+            _name: &str,
+            _log: &Logger,
+        ) -> Result<SrvRecordResp, ResolverError> {
+            let mut srv_resp = SrvRecordResp::default();
+            srv_resp.answers.push(SrvRecord {
+                port: 1,
+                priority: 1,
+                target: "_tcp.cheesy_record.joyent.us".to_string(),
+                ttl: 60,
+                weight: 100,
+            });
+            srv_resp.answers.push(SrvRecord {
+                port: 2,
+                priority: 1,
+                target: "_tcp.cheesy_record.joyent.us".to_string(),
+                ttl: 60,
+                weight: 100,
+            });
+            Ok(srv_resp)
+        }
+
+        fn query_a(
+            &self,
+            _name: &str,
+            _log: &Logger,
+        ) -> Result<ARecordResp, ResolverError> {
+            let mut a_resp = ARecordResp::default();
+            a_resp.answers.push(ARecord {
+                name: "cheesy_record.joyent.us".to_string(),
+                ttl: 60,
+                address: "1.2.3.4".parse::<IpAddr>()?,
+            });
+            Ok(a_resp)
+        }
+    }
+
+    let mock_resolvers = MockDnsClient {};
+    let mut resolvers: Vec<Arc<dyn DnsClient + Send + Sync>> = Vec::new();
+    resolvers.push(Arc::new(mock_resolvers));
+
+    let mut dr = DnsResolver::new(
+        "cheesy_record.joyent.us.".to_string(),
+        "_tcp".to_string(),
+        Some(resolvers),
+        log.clone(),
+    );
+
+    let (sender, receiver) = channel();
+
+    dr.run(sender);
+
+    for _ in 0..6 {
+        match receiver.recv() {
+            Ok(BackendMsg::AddedMsg(added_msg)) => {
+                debug!(log, "Recved add backend {}", added_msg.key);
+                assert!(true);
+            }
+            Ok(BackendMsg::RemovedMsg(removed_msg)) => {
+                debug!(log, "Recvd rem backend {:?}", removed_msg.0);
+                assert!(true);
+            }
+            Ok(BackendMsg::StopMsg) => {
+                debug!(log, "Recvd stop resolver");
+                assert!(true);
+            }
+            _ => {
+                debug!(log, "received error");
+                assert!(false);
+            }
+        };
     }
 }

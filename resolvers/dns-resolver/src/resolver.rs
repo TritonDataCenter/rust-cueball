@@ -504,149 +504,75 @@ fn send_removed_backends(
     });
 }
 
-#[test]
-fn test_resolver_single_srv() {
-    use crate::dns_client::{ARecord, ARecordResp, SrvRecord, SrvRecordResp};
-    use slog::{info, o, Drain, Logger};
-    use std::sync::mpsc::channel;
-    use std::sync::Mutex;
-
-    let plain = slog_term::PlainSyncDecorator::new(std::io::stdout());
-    let log = Logger::root(
-        Mutex::new(slog_term::FullFormat::new(plain).build()).fuse(),
-        o!("build-id" => "0.0.1"),
-    );
-
-    struct MockDnsClient {}
-    impl DnsClient for MockDnsClient {
-        fn query_srv(
-            &self,
-            _name: &str,
-            _log: &Logger,
-        ) -> Result<SrvRecordResp, ResolverError> {
-            let mut srv_resp = SrvRecordResp::default();
-            srv_resp.answers.push(SrvRecord {
-                port: 123,
-                priority: 1,
-                target: "_tcp.cheesy_record.joyent.us".to_string(),
-                ttl: 60,
-                weight: 100,
-            });
-            Ok(srv_resp)
-        }
-
-        fn query_a(
-            &self,
-            _name: &str,
-            _log: &Logger,
-        ) -> Result<ARecordResp, ResolverError> {
-            let mut a_resp = ARecordResp::default();
-            a_resp.answers.push(ARecord {
-                name: "cheesy_record.joyent.us".to_string(),
-                ttl: 60,
-                address: "1.2.3.4".parse::<IpAddr>()?,
-            });
-            Ok(a_resp)
-        }
-    }
-
-    let mock_resolvers = MockDnsClient {};
-    let mut resolvers: Vec<Arc<dyn DnsClient + Send + Sync>> = Vec::new();
-    resolvers.push(Arc::new(mock_resolvers));
-    info!(log, "running basic cueball resolver example");
-
-    let mut dr = DnsResolver::new(
-        "cheesy_record.joyent.us.".to_string(),
-        "_tcp".to_string(),
-        Some(resolvers),
-        log.clone(),
-    );
-
-    let (sender, receiver) = channel();
-
-    dr.run(sender);
-    let backend_msg = match receiver.recv() {
-        Ok(BackendMsg::AddedMsg(added_msg)) => Ok(added_msg),
-        _ => Err(()),
+#[cfg(test)]
+mod tests {
+    use crate::dns_client::{
+        ARecord, ARecordResp, DnsClient, SrvRecord, SrvRecordResp,
     };
-    match backend_msg {
-        Ok(r) => {
-            assert_eq!(r.backend.address.to_string(), "1.2.3.4");
-            assert_eq!(r.backend.port, 123);
-        }
-        Err(_) => assert!(false),
-    }
-}
-
-#[test]
-fn test_resolver_multi_srv() {
-    use crate::dns_client::{ARecord, ARecordResp, SrvRecord, SrvRecordResp};
-    use slog::{o, Drain, Logger};
+    use crate::resolver::{DnsResolver, ResolverError};
+    use cueball::resolver::{BackendMsg, Resolver};
+    use slog::{debug, info, o, Drain, Logger};
+    use std::net::IpAddr;
     use std::sync::mpsc::channel;
+    use std::sync::Arc;
     use std::sync::Mutex;
 
-    let plain = slog_term::PlainSyncDecorator::new(std::io::stdout());
-    let log = Logger::root(
-        Mutex::new(slog_term::FullFormat::new(plain).build()).fuse(),
-        o!("build-id" => "0.0.1"),
-    );
+    #[test]
+    fn test_resolver_single_srv() {
+        let plain = slog_term::PlainSyncDecorator::new(std::io::stdout());
+        let log = Logger::root(
+            Mutex::new(slog_term::FullFormat::new(plain).build()).fuse(),
+            o!("build-id" => "0.0.1"),
+        );
 
-    struct MockDnsClient {}
-    impl DnsClient for MockDnsClient {
-        fn query_srv(
-            &self,
-            _name: &str,
-            _log: &Logger,
-        ) -> Result<SrvRecordResp, ResolverError> {
-            let mut srv_resp = SrvRecordResp::default();
-            srv_resp.answers.push(SrvRecord {
-                port: 1,
-                priority: 1,
-                target: "_tcp.cheesy_record.joyent.us".to_string(),
-                ttl: 60,
-                weight: 100,
-            });
-            srv_resp.answers.push(SrvRecord {
-                port: 2,
-                priority: 1,
-                target: "_tcp.cheesy_record.joyent.us".to_string(),
-                ttl: 60,
-                weight: 100,
-            });
-            Ok(srv_resp)
+        struct MockDnsClient {}
+        impl DnsClient for MockDnsClient {
+            fn query_srv(
+                &self,
+                _name: &str,
+                _log: &Logger,
+            ) -> Result<SrvRecordResp, ResolverError> {
+                let mut srv_resp = SrvRecordResp::default();
+                srv_resp.answers.push(SrvRecord {
+                    port: 123,
+                    priority: 1,
+                    target: "_tcp.cheesy_record.joyent.us".to_string(),
+                    ttl: 60,
+                    weight: 100,
+                });
+                Ok(srv_resp)
+            }
+
+            fn query_a(
+                &self,
+                _name: &str,
+                _log: &Logger,
+            ) -> Result<ARecordResp, ResolverError> {
+                let mut a_resp = ARecordResp::default();
+                a_resp.answers.push(ARecord {
+                    name: "cheesy_record.joyent.us".to_string(),
+                    ttl: 60,
+                    address: "1.2.3.4".parse::<IpAddr>()?,
+                });
+                Ok(a_resp)
+            }
         }
 
-        fn query_a(
-            &self,
-            _name: &str,
-            _log: &Logger,
-        ) -> Result<ARecordResp, ResolverError> {
-            let mut a_resp = ARecordResp::default();
-            a_resp.answers.push(ARecord {
-                name: "cheesy_record.joyent.us".to_string(),
-                ttl: 60,
-                address: "1.2.3.4".parse::<IpAddr>()?,
-            });
-            Ok(a_resp)
-        }
-    }
+        let mock_resolvers = MockDnsClient {};
+        let mut resolvers: Vec<Arc<dyn DnsClient + Send + Sync>> = Vec::new();
+        resolvers.push(Arc::new(mock_resolvers));
+        info!(log, "running basic cueball resolver example");
 
-    let mock_resolvers = MockDnsClient {};
-    let mut resolvers: Vec<Arc<dyn DnsClient + Send + Sync>> = Vec::new();
-    resolvers.push(Arc::new(mock_resolvers));
+        let mut dr = DnsResolver::new(
+            "cheesy_record.joyent.us.".to_string(),
+            "_tcp".to_string(),
+            Some(resolvers),
+            log.clone(),
+        );
 
-    let mut dr = DnsResolver::new(
-        "cheesy_record.joyent.us.".to_string(),
-        "_tcp".to_string(),
-        Some(resolvers),
-        log.clone(),
-    );
+        let (sender, receiver) = channel();
 
-    let (sender, receiver) = channel();
-
-    dr.run(sender);
-
-    for _ in 0..1 {
+        dr.run(sender);
         let backend_msg = match receiver.recv() {
             Ok(BackendMsg::AddedMsg(added_msg)) => Ok(added_msg),
             _ => Err(()),
@@ -654,99 +580,172 @@ fn test_resolver_multi_srv() {
         match backend_msg {
             Ok(r) => {
                 assert_eq!(r.backend.address.to_string(), "1.2.3.4");
-                assert!(r.backend.port < 3);
+                assert_eq!(r.backend.port, 123);
             }
             Err(_) => assert!(false),
         }
     }
-}
 
-#[test]
-fn test_resolver_interval() {
-    use crate::dns_client::{ARecord, ARecordResp, SrvRecord, SrvRecordResp};
-    use slog::{o, Drain, Logger};
-    use std::sync::mpsc::channel;
-    use std::sync::Mutex;
+    #[test]
+    fn test_resolver_multi_srv() {
+        let plain = slog_term::PlainSyncDecorator::new(std::io::stdout());
+        let log = Logger::root(
+            Mutex::new(slog_term::FullFormat::new(plain).build()).fuse(),
+            o!("build-id" => "0.0.1"),
+        );
 
-    let plain = slog_term::PlainSyncDecorator::new(std::io::stdout());
-    let log = Logger::root(
-        Mutex::new(slog_term::FullFormat::new(plain).build()).fuse(),
-        o!("build-id" => "0.0.1"),
-    );
+        struct MockDnsClient {}
+        impl DnsClient for MockDnsClient {
+            fn query_srv(
+                &self,
+                _name: &str,
+                _log: &Logger,
+            ) -> Result<SrvRecordResp, ResolverError> {
+                let mut srv_resp = SrvRecordResp::default();
+                srv_resp.answers.push(SrvRecord {
+                    port: 1,
+                    priority: 1,
+                    target: "_tcp.cheesy_record.joyent.us".to_string(),
+                    ttl: 60,
+                    weight: 100,
+                });
+                srv_resp.answers.push(SrvRecord {
+                    port: 2,
+                    priority: 1,
+                    target: "_tcp.cheesy_record.joyent.us".to_string(),
+                    ttl: 60,
+                    weight: 100,
+                });
+                Ok(srv_resp)
+            }
 
-    struct MockDnsClient {}
-    impl DnsClient for MockDnsClient {
-        fn query_srv(
-            &self,
-            _name: &str,
-            _log: &Logger,
-        ) -> Result<SrvRecordResp, ResolverError> {
-            let mut srv_resp = SrvRecordResp::default();
-            srv_resp.answers.push(SrvRecord {
-                port: 1,
-                priority: 1,
-                target: "_tcp.cheesy_record.joyent.us".to_string(),
-                ttl: 60,
-                weight: 100,
-            });
-            srv_resp.answers.push(SrvRecord {
-                port: 2,
-                priority: 1,
-                target: "_tcp.cheesy_record.joyent.us".to_string(),
-                ttl: 60,
-                weight: 100,
-            });
-            Ok(srv_resp)
+            fn query_a(
+                &self,
+                _name: &str,
+                _log: &Logger,
+            ) -> Result<ARecordResp, ResolverError> {
+                let mut a_resp = ARecordResp::default();
+                a_resp.answers.push(ARecord {
+                    name: "cheesy_record.joyent.us".to_string(),
+                    ttl: 60,
+                    address: "1.2.3.4".parse::<IpAddr>()?,
+                });
+                Ok(a_resp)
+            }
         }
 
-        fn query_a(
-            &self,
-            _name: &str,
-            _log: &Logger,
-        ) -> Result<ARecordResp, ResolverError> {
-            let mut a_resp = ARecordResp::default();
-            a_resp.answers.push(ARecord {
-                name: "cheesy_record.joyent.us".to_string(),
-                ttl: 60,
-                address: "1.2.3.4".parse::<IpAddr>()?,
-            });
-            Ok(a_resp)
+        let mock_resolvers = MockDnsClient {};
+        let mut resolvers: Vec<Arc<dyn DnsClient + Send + Sync>> = Vec::new();
+        resolvers.push(Arc::new(mock_resolvers));
+
+        let mut dr = DnsResolver::new(
+            "cheesy_record.joyent.us.".to_string(),
+            "_tcp".to_string(),
+            Some(resolvers),
+            log.clone(),
+        );
+
+        let (sender, receiver) = channel();
+
+        dr.run(sender);
+
+        for _ in 0..1 {
+            let backend_msg = match receiver.recv() {
+                Ok(BackendMsg::AddedMsg(added_msg)) => Ok(added_msg),
+                _ => Err(()),
+            };
+            match backend_msg {
+                Ok(r) => {
+                    assert_eq!(r.backend.address.to_string(), "1.2.3.4");
+                    assert!(r.backend.port < 3);
+                }
+                Err(_) => assert!(false),
+            }
         }
     }
 
-    let mock_resolvers = MockDnsClient {};
-    let mut resolvers: Vec<Arc<dyn DnsClient + Send + Sync>> = Vec::new();
-    resolvers.push(Arc::new(mock_resolvers));
+    #[test]
+    fn test_resolver_interval() {
+        let plain = slog_term::PlainSyncDecorator::new(std::io::stdout());
+        let log = Logger::root(
+            Mutex::new(slog_term::FullFormat::new(plain).build()).fuse(),
+            o!("build-id" => "0.0.1"),
+        );
 
-    let mut dr = DnsResolver::new(
-        "cheesy_record.joyent.us.".to_string(),
-        "_tcp".to_string(),
-        Some(resolvers),
-        log.clone(),
-    );
+        struct MockDnsClient {}
+        impl DnsClient for MockDnsClient {
+            fn query_srv(
+                &self,
+                _name: &str,
+                _log: &Logger,
+            ) -> Result<SrvRecordResp, ResolverError> {
+                let mut srv_resp = SrvRecordResp::default();
+                srv_resp.answers.push(SrvRecord {
+                    port: 1,
+                    priority: 1,
+                    target: "_tcp.cheesy_record.joyent.us".to_string(),
+                    ttl: 2,
+                    weight: 100,
+                });
+                srv_resp.answers.push(SrvRecord {
+                    port: 2,
+                    priority: 1,
+                    target: "_tcp.cheesy_record.joyent.us".to_string(),
+                    ttl: 2,
+                    weight: 100,
+                });
+                Ok(srv_resp)
+            }
 
-    let (sender, receiver) = channel();
+            fn query_a(
+                &self,
+                _name: &str,
+                _log: &Logger,
+            ) -> Result<ARecordResp, ResolverError> {
+                let mut a_resp = ARecordResp::default();
+                a_resp.answers.push(ARecord {
+                    name: "cheesy_record.joyent.us".to_string(),
+                    ttl: 60,
+                    address: "1.2.3.4".parse::<IpAddr>()?,
+                });
+                Ok(a_resp)
+            }
+        }
 
-    dr.run(sender);
+        let mock_resolvers = MockDnsClient {};
+        let mut resolvers: Vec<Arc<dyn DnsClient + Send + Sync>> = Vec::new();
+        resolvers.push(Arc::new(mock_resolvers));
 
-    for _ in 0..6 {
-        match receiver.recv() {
-            Ok(BackendMsg::AddedMsg(added_msg)) => {
-                debug!(log, "Recved add backend {}", added_msg.key);
-                assert!(true);
-            }
-            Ok(BackendMsg::RemovedMsg(removed_msg)) => {
-                debug!(log, "Recvd rem backend {:?}", removed_msg.0);
-                assert!(true);
-            }
-            Ok(BackendMsg::StopMsg) => {
-                debug!(log, "Recvd stop resolver");
-                assert!(true);
-            }
-            _ => {
-                debug!(log, "received error");
-                assert!(false);
-            }
-        };
+        let mut dr = DnsResolver::new(
+            "cheesy_record.joyent.us.".to_string(),
+            "_tcp".to_string(),
+            Some(resolvers),
+            log.clone(),
+        );
+
+        let (sender, receiver) = channel();
+
+        dr.run(sender);
+
+        for _ in 0..6 {
+            match receiver.recv() {
+                Ok(BackendMsg::AddedMsg(added_msg)) => {
+                    debug!(log, "Recved add backend {}", added_msg.key);
+                    assert!(true);
+                }
+                Ok(BackendMsg::RemovedMsg(removed_msg)) => {
+                    debug!(log, "Recvd rem backend {:?}", removed_msg.0);
+                    assert!(true);
+                }
+                Ok(BackendMsg::StopMsg) => {
+                    debug!(log, "Recvd stop resolver");
+                    assert!(true);
+                }
+                _ => {
+                    debug!(log, "received error");
+                    assert!(false);
+                }
+            };
+        }
     }
 }

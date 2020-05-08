@@ -39,9 +39,6 @@ impl DnsResolver {
         domain: String,
         service: String,
         resolvers: Option<Vec<Arc<dyn DnsClient + Send + Sync>>>,
-        /*
-        resolvers: Option<Arc<Vec<dyn DnsClient + Send + Sync>>>,
-        */
         log: Logger,
     ) -> Self {
         DnsResolver {
@@ -511,7 +508,7 @@ mod tests {
     };
     use crate::resolver::{DnsResolver, ResolverError};
     use cueball::resolver::{BackendMsg, Resolver};
-    use slog::{debug, info, o, Drain, Logger};
+    use slog::{debug, o, Drain, Logger};
     use std::net::IpAddr;
     use std::sync::mpsc::channel;
     use std::sync::Arc;
@@ -561,7 +558,6 @@ mod tests {
         let mock_resolvers = MockDnsClient {};
         let mut resolvers: Vec<Arc<dyn DnsClient + Send + Sync>> = Vec::new();
         resolvers.push(Arc::new(mock_resolvers));
-        info!(log, "running basic cueball resolver example");
 
         let mut dr = DnsResolver::new(
             "cheesy_record.joyent.us.".to_string(),
@@ -593,7 +589,6 @@ mod tests {
             Mutex::new(slog_term::FullFormat::new(plain).build()).fuse(),
             o!("build-id" => "0.0.1"),
         );
-
         struct MockDnsClient {}
         impl DnsClient for MockDnsClient {
             fn query_srv(

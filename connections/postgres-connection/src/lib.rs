@@ -251,18 +251,15 @@ fn make_tls_connector(tls_config: &TlsConfig) -> Option<MakeTlsConnector> {
         TlsConnectMode::Disable => None,
         TlsConnectMode::Allow
         | TlsConnectMode::Prefer
-        | TlsConnectMode::Require => {
-            m_cert.and_then(|cert| {
-                let connector = TlsConnector::builder()
-                    .add_root_certificate(cert)
-                    .build()
-                    .unwrap();
-                let connector = MakeTlsConnector::new(connector);
-                Some(connector)
-            })
-        }
-        TlsConnectMode::VerifyCa
-        | TlsConnectMode::VerifyFull => {
+        | TlsConnectMode::Require => m_cert.and_then(|cert| {
+            let connector = TlsConnector::builder()
+                .add_root_certificate(cert)
+                .build()
+                .unwrap();
+            let connector = MakeTlsConnector::new(connector);
+            Some(connector)
+        }),
+        TlsConnectMode::VerifyCa | TlsConnectMode::VerifyFull => {
             let cert = m_cert.expect(
                 "A certificate is required for \
                  verify-ca, and verify-full SSL modes",

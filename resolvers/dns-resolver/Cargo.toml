@@ -14,7 +14,7 @@ edition = "2018"
 [dependencies]
 base64 = "0.10.1"
 chrono = "0.4"
-cueball = "0.3.0"
+cueball = { path = "../../cueball" }
 custom_derive = "0.1.7"
 derive_more = "0.14.0"
 futures = "0.1"

@@ -1,6 +1,6 @@
 [package]
 name = "manatee-echo-resolver"
-version = "0.1.0"
+version = "0.1.1"
 authors = ["Isaac Davis <isaac.davis@joyent.com>"]
 description = """
 Runs a manatee primary resolver instance and prints its logging, as well as
@@ -14,6 +14,6 @@ edition = "2018"
 
 [dependencies]
 clap = "2.32"
-cueball = { path = "../../cueball", version = "0.3.0" }
-cueball-manatee-primary-resolver = { path = "../../resolvers/manatee-primary-resolver" }
+cueball = { path = "../../cueball", version = "0.3.5" }
+cueball-manatee-primary-resolver = { path = "../../resolvers/manatee-primary-resolver", version = "0.5.1" }
 slog = { version = "2.4.1", features = [ "max_level_trace" ] }

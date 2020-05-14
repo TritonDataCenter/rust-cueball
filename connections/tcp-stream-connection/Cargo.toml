@@ -1,6 +1,6 @@
 [package]
 name = "cueball-tcp-stream-connection"
-version = "0.3.0"
+version = "0.3.1"
 authors = ["Kelly McLaughlin <kelly.mclaughlin@joyent.com>"]
 description = """
 This is an implementation of the cueball Connection trait for TcpStream from the rust standard library.
@@ -12,4 +12,4 @@ license = "MPL-2.0"
 edition = "2018"
 
 [dependencies]
-cueball = { path = '../../cueball', version = '0.3.0' }
+cueball = { path = '../../cueball', version = '0.3.5' }

@@ -1,6 +1,6 @@
 [package]
 name = "cueball-postgres-connection"
-version = "0.3.0"
+version = "0.3.1"
 authors = ["Kelly McLaughlin <kelly.mclaughlin@joyent.com>"]
 description = """
 This is an implementation of the cueball Connection trait for postgres::Client from the rust-postgres crate.
@@ -12,7 +12,7 @@ license = "MPL-2.0"
 edition = "2018"
 
 [dependencies]
-cueball = { path = '../../cueball', version = '0.3.0' }
+cueball = { path = '../../cueball', version = '0.3.5' }
 native-tls = "0.2.3"
 postgres = "0.17.3"
 postgres-protocol = "= 0.5.1"

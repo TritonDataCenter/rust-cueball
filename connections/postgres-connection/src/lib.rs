@@ -9,8 +9,8 @@ use native_tls::Error as NativeError;
 use native_tls::TlsConnector;
 use postgres;
 use postgres::{Client, NoTls};
+use postgres_native_tls::MakeTlsConnector;
 use serde_derive::Deserialize;
-use tokio_postgres_native_tls::MakeTlsConnector;
 
 use cueball::backend::Backend;
 use cueball::connection::Connection;
@@ -223,10 +223,10 @@ impl TlsConfig {
         }
     }
 
-    pub fn require(certificate: Certificate) -> Self {
+    pub fn require(certificate: Option<Certificate>) -> Self {
         TlsConfig {
             mode: TlsConnectMode::Require,
-            certificate: Some(certificate),
+            certificate,
         }
     }
 
@@ -249,21 +249,19 @@ fn make_tls_connector(tls_config: &TlsConfig) -> Option<MakeTlsConnector> {
     let m_cert = tls_config.certificate.clone();
     match tls_config.mode {
         TlsConnectMode::Disable => None,
-        TlsConnectMode::Allow | TlsConnectMode::Prefer => {
-            m_cert.and_then(|cert| {
-                let connector = TlsConnector::builder()
-                    .add_root_certificate(cert)
-                    .build()
-                    .unwrap();
-                let connector = MakeTlsConnector::new(connector);
-                Some(connector)
-            })
-        }
-        TlsConnectMode::Require
-        | TlsConnectMode::VerifyCa
-        | TlsConnectMode::VerifyFull => {
+        TlsConnectMode::Allow
+        | TlsConnectMode::Prefer
+        | TlsConnectMode::Require => m_cert.and_then(|cert| {
+            let connector = TlsConnector::builder()
+                .add_root_certificate(cert)
+                .build()
+                .unwrap();
+            let connector = MakeTlsConnector::new(connector);
+            Some(connector)
+        }),
+        TlsConnectMode::VerifyCa | TlsConnectMode::VerifyFull => {
             let cert = m_cert.expect(
-                "A certificate is required for require, \
+                "A certificate is required for \
                  verify-ca, and verify-full SSL modes",
             );
             let connector = TlsConnector::builder()

@@ -251,14 +251,26 @@ fn make_tls_connector(tls_config: &TlsConfig) -> Option<MakeTlsConnector> {
         TlsConnectMode::Disable => None,
         TlsConnectMode::Allow
         | TlsConnectMode::Prefer
-        | TlsConnectMode::Require => m_cert.and_then(|cert| {
-            let connector = TlsConnector::builder()
-                .add_root_certificate(cert)
-                .build()
-                .unwrap();
-            let connector = MakeTlsConnector::new(connector);
-            Some(connector)
-        }),
+        | TlsConnectMode::Require => {
+            if let Some(cert) = m_cert {
+                // root cert supplied, use it to verify server certs
+                let connector = TlsConnector::builder()
+                    .add_root_certificate(cert)
+                    .build()
+                    .unwrap();
+                let connector = MakeTlsConnector::new(connector);
+                Some(connector)
+            } else {
+                // no cert is given, disable certificate verification
+                // should we emit a warning to stderr since the function has "danger" in it?
+                let connector = TlsConnector::builder()
+                    .danger_accept_invalid_certs(true)
+                    .build()
+                    .unwrap();
+                let connector = MakeTlsConnector::new(connector);
+                Some(connector)
+            }
+        }
         TlsConnectMode::VerifyCa | TlsConnectMode::VerifyFull => {
             let cert = m_cert.expect(
                 "A certificate is required for \
